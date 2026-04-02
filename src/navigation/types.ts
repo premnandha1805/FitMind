@@ -13,6 +13,9 @@ export type RootStackParamList = {
         pattern?: string;
         styleType?: string;
         colorHex?: string;
+        season?: string;
+        userCorrected?: number;
+        timesWorn?: number;
       };
     }
     | undefined;

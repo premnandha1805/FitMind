@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { Platform } from 'react-native';
 import { executeSqlWithRetry, executeTransactionWithRetry } from '../db/queries';
-import { generateOutfits } from '../services/outfitEngine';
+import { generateGuaranteed } from '../services/outfitEngine';
 import { ClothingItem, Outfit, TasteProfile, UserProfile } from '../types/models';
 import { safeAsync } from '../utils/safeAsync';
 
@@ -42,7 +42,7 @@ export const useOutfitStore = create<OutfitState>((set) => ({
 
     set({ loading: true, note: null, candidatePool });
     const { data, error } = await safeAsync(
-      async () => generateOutfits(occasion, closetItems, user, taste),
+      async () => generateGuaranteed(occasion, closetItems, user, taste),
       'Outfit.generate'
     );
 

@@ -97,6 +97,7 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
   const [isSaving, setIsSaving] = useState(false);
   const [cameraDenied, setCameraDenied] = useState(false);
   const [errorHint, setErrorHint] = useState<string | null>(null);
+  const [hasUserEdited, setHasUserEdited] = useState(false);
   const isWeb = Platform.OS === 'web';
 
   const pulse = useRef(new Animated.Value(0)).current;
@@ -363,7 +364,7 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
         pattern,
         styleType,
         season,
-        userCorrected: 1,
+        userCorrected: hasUserEdited ? 1 : ((editingItem as any)?.userCorrected ?? 1),
       }));
       showToast('Item updated');
       await safeAsync(async () => FileSystem.deleteAsync(uri, { idempotent: true }), 'AddItemScreen.cleanupTempUri');
@@ -380,7 +381,7 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
         pattern,
         styleType,
         season,
-        userCorrected: 1,
+        userCorrected: hasUserEdited ? 1 : ((editingItem as any)?.userCorrected ?? 0),
         timesWorn: 0,
         lastWorn: null,
         createdAt: new Date().toISOString(),
@@ -527,7 +528,10 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
                 return (
                   <Pressable
                     key={option}
-                    onPress={() => setCategoryLabel(option)}
+                    onPress={() => {
+                      setCategoryLabel(option);
+                      setHasUserEdited(true);
+                    }}
                     style={[styles.pill, selected ? styles.pillSelected : styles.pillUnselected]}
                   >
                     <Text style={[styles.pillText, selected ? styles.pillTextSelected : styles.pillTextUnselected]}>{option}</Text>
@@ -559,7 +563,10 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
                 return (
                   <Pressable
                     key={option}
-                    onPress={() => setPattern(option)}
+                    onPress={() => {
+                      setPattern(option);
+                      setHasUserEdited(true);
+                    }}
                     style={[styles.pill, selected ? styles.pillSelected : styles.pillUnselected]}
                   >
                     <Text style={[styles.pillText, selected ? styles.pillTextSelected : styles.pillTextUnselected]}>{formatLabel(option)}</Text>
@@ -575,7 +582,10 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
                 return (
                   <Pressable
                     key={option}
-                    onPress={() => setSeason(option)}
+                    onPress={() => {
+                      setSeason(option);
+                      setHasUserEdited(true);
+                    }}
                     style={[styles.pill, selected ? styles.pillSelected : styles.pillUnselected]}
                   >
                     <Text style={[styles.pillText, selected ? styles.pillTextSelected : styles.pillTextUnselected]}>{formatLabel(option)}</Text>

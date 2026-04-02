@@ -17,6 +17,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { NavigationProp, useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUserStore } from '../store/useUserStore';
+import { useClosetStore } from '../store/useClosetStore';
 import { executeSqlWithRetry, getAll, getOne } from '../db/queries';
 import { detectTasteInsights, getLearningProgress, recalculateTasteWeights } from '../services/feedbackEngine';
 import { getTasteProfile } from '../services/tasteEngine';
@@ -37,6 +38,7 @@ export default function ProfileScreen(): React.JSX.Element {
   const { compact, rs } = useResponsive();
   const navigation = useNavigation<NavigationProp<RootStackParamList & MainTabParamList>>();
   const user = useUserStore((s) => s.profile);
+  const items = useClosetStore((s) => s.items);
   const savePreferences = useUserStore((s) => s.savePreferences);
 
   const [blocked, setBlocked] = useState<Array<{ id: string; pattern_type: string }>>([]);
@@ -425,6 +427,7 @@ export default function ProfileScreen(): React.JSX.Element {
       {__DEV__ ? (
         <View style={styles.devDebugCard}>
           <Text style={styles.devDebugTitle}>Debug Session Stats</Text>
+          <Text style={styles.devDebugLine}>Closet Stats: {items.length} items</Text>
           <Text style={styles.devDebugLine}>API calls this session: {apiCallsThisSession}</Text>
           <Text style={styles.devDebugLine}>Cache hit rate: {cacheHitRate.toFixed(0)}%</Text>
         </View>

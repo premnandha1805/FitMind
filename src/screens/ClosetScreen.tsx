@@ -16,6 +16,7 @@ import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useClosetStore } from '../store/useClosetStore';
+import { safeAsync } from '../utils/safeAsync';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/types';
@@ -220,8 +221,14 @@ export default function ClosetScreen(): React.JSX.Element {
   const [emptyFabPressed, setEmptyFabPressed] = useState(false);
 
   useEffect(() => {
-    loadItems();
-  }, [loadItems]);
+    safeAsync(async () => {
+      await loadItems();
+      await useClosetStore.getState().migrateCategories();
+      if (__DEV__) {
+        console.info('[Closet] Item audit complete:', items.length);
+      }
+    }, 'ClosetScreen.loadAndMigrate');
+  }, [loadItems, items.length]);
 
   const filtered = filter === 'all' ? items : items.filter((i) => i.category === filter);
 
@@ -286,6 +293,9 @@ export default function ClosetScreen(): React.JSX.Element {
                     pattern: closetItem.pattern ?? 'solid',
                     styleType: closetItem.styleType,
                     colorHex: closetItem.colorHex,
+                    season: closetItem.season,
+                    userCorrected: (closetItem as any)?.userCorrected ?? 0,
+                    timesWorn: 0,
                   },
                 });
               }}

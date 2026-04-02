@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Image, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -75,6 +75,13 @@ export default function HomeScreen(): React.JSX.Element {
     return null;
   }, [note]);
 
+  const handleOccasionSelect = useCallback(async (occ: string) => {
+    if (!userProfile || !tasteProfile) return;
+    await safeAsync(async () => {
+      await generate(occ, closetItems, userProfile, tasteProfile);
+    }, 'HomeScreen.handleOccasionSelect');
+  }, [userProfile, tasteProfile, generate, closetItems]);
+
   const handleReject = (outfitId: string): void => {
     const value = rejectAnimations.current[outfitId] ?? new Animated.Value(0);
     rejectAnimations.current[outfitId] = value;
@@ -88,11 +95,8 @@ export default function HomeScreen(): React.JSX.Element {
         const updated = prev.filter((o) => o.id !== outfitId);
         if (updated.length === 0 && prev.length > 0 && !autoRegenerated) {
           setAutoRegenerated(true);
-          safeAsync(async () => {
-            if (!userProfile || !tasteProfile) return;
-            const occasion = outfits[0]?.occasion ?? 'casual';
-            await generate(occasion, closetItems, userProfile, tasteProfile);
-          }, 'HomeScreen.autoRegenerateOutfits');
+          const occasion = outfits[0]?.occasion ?? 'casual';
+          void handleOccasionSelect(occasion);
         }
         if (!updated.find((outfit) => outfit.id === activeOutfitId)) {
           setActiveOutfitId(updated[0]?.id ?? null);

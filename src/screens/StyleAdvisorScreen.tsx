@@ -768,7 +768,10 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
                   onPress={() => {
                     setSelectedChip(chip.label);
                     setInput(chip.prompt);
-                    void sendPrompt(chip.prompt);
+                    // Small delay so user sees it filled
+                    setTimeout(() => {
+                      void sendPrompt(chip.prompt);
+                    }, 150);
                   }}
                 >
                   <Text style={[styles.chipText, active ? styles.chipTextActive : null]}>{chip.label}</Text>
@@ -1107,7 +1110,7 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    color: '#f0ede9',
+    color: '#e5e2e1',
     fontFamily: 'Inter_400Regular',
     fontSize: 14,
     minHeight: 44,
