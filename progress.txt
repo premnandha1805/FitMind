@@ -1,1 +1,2 @@
 [x] Message 5: Production Prompts (OUTFIT_PROMPT, ADVISOR_PROMPT, FITCHECK_PROMPT, validateGeminiResponse)
+[x] Message 2: Classification Fix (categoryMap.ts, CLASSIFY_PROMPT)
