@@ -39,16 +39,26 @@ export function AdvisorMessage({ response, closetItems, onTryDifferent, onPerfec
 
   return (
     <View style={styles.card}>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.badgesRow}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.badgesRow}
+      >
         <View style={styles.badgePrimary}><Text style={styles.badgePrimaryText}>{response.eventType}</Text></View>
-        {secondaryBadges.map((badge) => (
-          <View key={badge} style={styles.badgeSecondary}><Text style={styles.badgeSecondaryText}>{badge}</Text></View>
+        {secondaryBadges.map((badge, index) => (
+          <View key={`badge-${index}-${badge}`} style={styles.badgeSecondary}><Text style={styles.badgeSecondaryText}>{badge}</Text></View>
         ))}
       </ScrollView>
 
       <Text style={styles.advisorText}>{advisorText}</Text>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.clothingStrip}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.clothingStrip}
+      >
         {outfitItems.map((item) => (
           <View key={item.id} style={styles.itemCard}>
             <Image source={{ uri: item.imagePath }} resizeMode="cover" style={styles.itemImage} />
@@ -61,8 +71,8 @@ export function AdvisorMessage({ response, closetItems, onTryDifferent, onPerfec
 
       <Text style={styles.whyLabel}>WHY THIS WORKS</Text>
       <View style={styles.whyList}>
-        {response.explanation.map((line) => (
-          <View key={line} style={styles.lineRow}>
+        {response.explanation.map((line, index) => (
+          <View key={`explain-${index}-${line.slice(0, 24)}`} style={styles.lineRow}>
             <MaterialIcons name="check-circle" size={16} color="#e6c487" />
             <Text style={styles.lineText}>{line}</Text>
           </View>
@@ -79,7 +89,7 @@ export function AdvisorMessage({ response, closetItems, onTryDifferent, onPerfec
 
       {response.missingItems.length > 0 ? (
         <>
-          {response.missingItems.map((item) => <MissingItemCard key={item} item={item} />)}
+          {response.missingItems.map((item, index) => <MissingItemCard key={`missing-${index}-${item}`} item={item} />)}
         </>
       ) : null}
 

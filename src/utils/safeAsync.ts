@@ -7,7 +7,9 @@ export async function safeAsync<T>(
     return { data, error: null };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error(`[${context}] ${message}`);
+    if (__DEV__) {
+      console.error(`[${context}] ${message}`);
+    }
     return { data: null, error: message };
   }
 }

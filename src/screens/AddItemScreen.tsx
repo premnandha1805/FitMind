@@ -1,58 +1,70 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Animated,
   Easing,
   Image,
+  Linking,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
+  ToastAndroid,
   View,
   useWindowDimensions,
 } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as ImagePicker from 'expo-image-picker';
 import { StackScreenProps } from '@react-navigation/stack';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
-import { autoTagClothing } from '../services/mlkit';
+import { detectClothing, extractColorFromPixels } from '../services/visionEngine';
 import { ensureImageUnder4Mb, saveImageToAppDir } from '../utils/imageUtils';
 import { safeAsync } from '../utils/safeAsync';
 import { useClosetStore } from '../store/useClosetStore';
-import { rgbToHsl, rgbToHex } from '../utils/colorUtils';
 import { RootStackParamList } from '../navigation/types';
+import { normalizeClothingItem } from '../utils/normalizer';
+import { Category, ClothingPattern, ClothingStyleType } from '../types/models';
+import { normalizePattern, normalizeStyle } from '../constants/categoryMap';
 
 type Props = StackScreenProps<RootStackParamList, 'AddItem'>;
 
-type CategoryLabel = 'Footwear' | 'Outerwear' | 'Tops' | 'Accessories';
-type FitOccasion = 'Relaxed' | 'Tailored' | 'Evening' | 'Minimalist';
+type CategoryLabel = 'Top' | 'Bottom' | 'Shoes' | 'Accessory' | 'Outerwear';
+type SeasonLabel = 'summer' | 'winter' | 'all-season';
 
-const CATEGORY_OPTIONS: CategoryLabel[] = ['Footwear', 'Outerwear', 'Tops', 'Accessories'];
-const FIT_OPTIONS: FitOccasion[] = ['Relaxed', 'Tailored', 'Evening', 'Minimalist'];
+const CATEGORY_OPTIONS: CategoryLabel[] = ['Top', 'Bottom', 'Shoes', 'Accessory', 'Outerwear'];
+const STYLE_OPTIONS: ClothingStyleType[] = ['casual', 'formal', 'party', 'ethnic', 'professional', 'sports'];
+const PATTERN_OPTIONS: ClothingPattern[] = ['solid', 'stripes', 'checks', 'floral', 'print'];
+const SEASON_OPTIONS: SeasonLabel[] = ['summer', 'winter', 'all-season'];
 
-function categoryToLabel(category?: 'top' | 'bottom' | 'shoes' | 'accessory' | 'outerwear' | 'other'): CategoryLabel {
-  if (category === 'shoes') return 'Footwear';
+function categoryToLabel(category?: Category): CategoryLabel {
+  if (category === 'shoes') return 'Shoes';
+  if (category === 'bottom') return 'Bottom';
   if (category === 'outerwear') return 'Outerwear';
-  if (category === 'accessory') return 'Accessories';
-  return 'Tops';
+  if (category === 'accessory') return 'Accessory';
+  return 'Top';
 }
 
-function labelToCategory(label: CategoryLabel): 'top' | 'shoes' | 'accessory' | 'outerwear' {
-  if (label === 'Footwear') return 'shoes';
+function labelToCategory(label: CategoryLabel): Category {
+  if (label === 'Shoes') return 'shoes';
+  if (label === 'Bottom') return 'bottom';
   if (label === 'Outerwear') return 'outerwear';
-  if (label === 'Accessories') return 'accessory';
+  if (label === 'Accessory') return 'accessory';
   return 'top';
 }
 
-function randomColorFromUri(uri: string): { hex: string; hsl: string } {
-  let hash = 0;
-  for (let i = 0; i < uri.length; i += 1) hash = (hash + uri.charCodeAt(i) * (i + 1)) % 255;
-  const r = hash;
-  const g = (hash * 2) % 255;
-  const b = (hash * 3) % 255;
-  const hsl = rgbToHsl(r, g, b);
-  return { hex: rgbToHex(r, g, b), hsl: `hsl(${hsl.h.toFixed(0)},${hsl.s.toFixed(0)},${hsl.l.toFixed(0)})` };
+function confidenceBand(confidence: number): 'low' | 'medium' | 'high' {
+  if (confidence >= 0.8) return 'high';
+  if (confidence >= 0.6) return 'medium';
+  return 'low';
+}
+
+function formatLabel(style: string): string {
+  if (style === 'smart_casual') return 'Smart Casual';
+  return style.charAt(0).toUpperCase() + style.slice(1);
 }
 
 export default function AddItemScreen({ route, navigation }: Props): React.JSX.Element {
@@ -67,12 +79,25 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
 
   const [uri, setUri] = useState<string | null>(null);
   const [detectedLabel, setDetectedLabel] = useState<CategoryLabel>(categoryToLabel(route.params?.prefill?.category ?? editingItem?.category));
+  const [detectionConfidence, setDetectionConfidence] = useState<'low' | 'medium' | 'high'>('low');
   const [categoryLabel, setCategoryLabel] = useState<CategoryLabel>(categoryToLabel(route.params?.prefill?.category ?? editingItem?.category));
-  const [fitChoice, setFitChoice] = useState<FitOccasion>('Relaxed');
-  const [pattern, setPattern] = useState<string>(route.params?.prefill?.pattern ?? editingItem?.pattern ?? 'solid');
+  const initialStyle = normalizeStyle(route.params?.prefill?.styleType ?? editingItem?.styleType ?? 'casual');
+  const initialSeason = editingItem?.season === 'summer' || editingItem?.season === 'winter' || editingItem?.season === 'all-season'
+    ? editingItem.season
+    : 'all-season';
+  const [styleSelections, setStyleSelections] = useState<ClothingStyleType[]>([initialStyle]);
+  const [pattern, setPattern] = useState<ClothingPattern>(
+    normalizePattern(route.params?.prefill?.pattern ?? editingItem?.pattern ?? 'solid')
+  );
+  const [season, setSeason] = useState<SeasonLabel>(initialSeason);
   const [colorHex, setColorHex] = useState<string>(route.params?.prefill?.colorHex ?? editingItem?.colorHex ?? '#808080');
-  const [colorHsl, setColorHsl] = useState<string>('hsl(0,0,50)');
+  const [colorHsl, setColorHsl] = useState<string>((route.params?.prefill as any)?.colorHsl ?? editingItem?.colorHsl ?? 'hsl(0,0,50)');
   const [flashOn, setFlashOn] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [cameraDenied, setCameraDenied] = useState(false);
+  const [errorHint, setErrorHint] = useState<string | null>(null);
+  const isWeb = Platform.OS === 'web';
 
   const pulse = useRef(new Animated.Value(0)).current;
   const sheetY = useRef(new Animated.Value(460)).current;
@@ -118,35 +143,195 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
   const frameWidth = width * 0.8;
   const frameHeight = height * 0.6;
 
-  const styleType = useMemo(() => fitChoice.toLowerCase(), [fitChoice]);
+  const styleType = styleSelections[0] ?? 'casual';
+  const showDetectionHint = detectionConfidence === 'low';
+  const hintAcknowledged = showDetectionHint && categoryLabel !== detectedLabel;
+
+  const showToast = (message: string): void => {
+    if (Platform.OS === 'android') {
+      ToastAndroid.show(message, ToastAndroid.SHORT);
+      return;
+    }
+    Alert.alert('FitMind', message);
+  };
+
+  const toggleStyle = (style: ClothingStyleType): void => {
+    setStyleSelections((current) => {
+      if (current.includes(style)) {
+        const next = current.filter((x) => x !== style);
+        return next.length ? next : [style];
+      }
+      return [style, ...current.filter((x) => x !== style)];
+    });
+  };
+
+  const openSystemSettings = async (): Promise<void> => {
+    await safeAsync(async () => Linking.openSettings(), 'AddItemScreen.openSettings');
+  };
+
+  const processCapturedImage = async (rawUri: string): Promise<string | null> => {
+    const { data: compressed } = await safeAsync(async () => ensureImageUnder4Mb(rawUri), 'AddItemScreen.compressImage');
+    if (!compressed) return null;
+
+    setUri(compressed);
+    setIsAnalyzing(true);
+    setErrorHint(null);
+
+    const { data: analysis, error } = await safeAsync(async () => {
+      const [auto, color] = await Promise.all([
+        detectClothing(compressed),
+        extractColorFromPixels(compressed),
+      ]);
+      return { auto, color };
+    }, 'AddItemScreen.processCaptured');
+
+    if (analysis?.auto && analysis.color) {
+      const detected = categoryToLabel(analysis.auto.category);
+      setDetectedLabel(detected);
+      setDetectionConfidence(confidenceBand(analysis.auto.confidence));
+      if (!(editingItem?.userCorrected === 1)) {
+        setCategoryLabel(detected);
+        setPattern(normalizePattern(analysis.auto.pattern));
+        setStyleSelections([analysis.auto.style_type]);
+        const nextSeason = analysis.auto.season === 'summer' || analysis.auto.season === 'winter' || analysis.auto.season === 'all-season'
+          ? analysis.auto.season
+          : 'all-season';
+        setSeason(nextSeason);
+      }
+      setColorHex(analysis.color.hex);
+      setColorHsl(analysis.color.hsl);
+    }
+
+    if (error) {
+      setErrorHint("AI couldn't detect this item - please fill manually");
+      setDetectionConfidence('low');
+    }
+
+    setIsAnalyzing(false);
+    return compressed;
+  };
+
+  const pickFromGalleryNative = async (): Promise<string | null> => {
+    const mediaPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!mediaPermission.granted) {
+      setErrorHint('Gallery permission denied. Please enable photo access in Settings.');
+      return null;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 1,
+    });
+    if (result.canceled || !result.assets?.[0]?.uri) return null;
+    return processCapturedImage(result.assets[0].uri);
+  };
+
+  const captureFromCameraNative = async (): Promise<string | null> => {
+    const granted = permission?.granted ?? false;
+    if (!granted) {
+      const requested = await requestPermission();
+      if (!requested.granted) {
+        setCameraDenied(true);
+        return null;
+      }
+      setCameraDenied(false);
+    }
+
+    if (!cameraRef.current) {
+      setErrorHint('Camera unavailable right now. Please try again.');
+      return null;
+    }
+
+    let shot: { uri: string } | null | undefined = null;
+    try {
+      shot = await cameraRef.current.takePictureAsync({ quality: 1, skipProcessing: false });
+    } catch {
+      setErrorHint('Failed to capture photo. Please try again.');
+      return null;
+    }
+    if (!shot?.uri) return null;
+    return processCapturedImage(shot.uri);
+  };
+
+  const pickPhotoOnWeb = async (): Promise<string | null> => {
+    if (!isWeb) return null;
+    const host = globalThis as unknown as {
+      document?: {
+        createElement: (tag: string) => {
+          type: string;
+          accept: string;
+          onchange: ((this: unknown, ev: unknown) => void) | null;
+          click: () => void;
+          files?: ArrayLike<{ name?: string }>;
+        };
+      };
+      URL?: {
+        createObjectURL: (file: unknown) => string;
+      };
+    };
+
+    const documentRef = host.document;
+    const urlRef = host.URL;
+    if (!documentRef || !urlRef) return null;
+
+    return new Promise<string | null>((resolve) => {
+      const input = documentRef.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      let resolved = false;
+      const cleanup = () => {
+        if (typeof globalThis.removeEventListener === 'function') {
+          globalThis.removeEventListener('focus', onFocus);
+        }
+      };
+      const onFocus = () => {
+        setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            cleanup();
+            resolve(null);
+          }
+        }, 300);
+      };
+      input.onchange = () => {
+        resolved = true;
+        cleanup();
+        const file = input.files?.[0];
+        if (!file) {
+          resolve(null);
+          return;
+        }
+        resolve(urlRef.createObjectURL(file));
+      };
+      if (typeof globalThis.addEventListener === 'function') {
+        globalThis.addEventListener('focus', onFocus);
+      }
+      input.click();
+    });
+  };
 
   const takePhoto = async (): Promise<void> => {
-    if (!cameraRef.current) return;
-    const { data: captured } = await safeAsync(async () => {
-      const shot = await cameraRef.current?.takePictureAsync({ quality: 1, skipProcessing: false });
-      if (!shot?.uri) return null;
-
-      const compressed = await ensureImageUnder4Mb(shot.uri);
-      const auto = await autoTagClothing(compressed);
-      const detected = categoryToLabel(auto.category);
-
-      setDetectedLabel(detected);
-      setCategoryLabel(detected);
-      setPattern(auto.pattern);
-
-      const color = randomColorFromUri(compressed);
-      setColorHex(color.hex);
-      setColorHsl(color.hsl);
-
-      return compressed;
-    }, 'AddItemScreen.capture');
-
-    if (!captured) {
-      Alert.alert('Capture failed', 'Please try taking the photo again.');
+    if (isWeb) {
+      const picked = await pickPhotoOnWeb();
+      if (!picked) return;
+      const processed = await processCapturedImage(picked);
+      if (!processed) return;
       return;
     }
 
-    setUri(captured);
+    await captureFromCameraNative();
+  };
+
+  const chooseFromGallery = async (): Promise<void> => {
+    if (isWeb) {
+      const picked = await pickPhotoOnWeb();
+      if (!picked) return;
+      const processed = await processCapturedImage(picked);
+      if (!processed) return;
+      return;
+    }
+
+    await pickFromGalleryNative();
   };
 
   const retake = async (): Promise<void> => {
@@ -154,29 +339,39 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
       await safeAsync(async () => FileSystem.deleteAsync(uri, { idempotent: true }), 'AddItemScreen.retakeCleanup');
     }
     setUri(null);
+    setIsAnalyzing(false);
+    setErrorHint(null);
   };
 
   const save = async (): Promise<void> => {
-    if (!uri) return;
+    if (!uri || isAnalyzing || isSaving) return;
+    setIsSaving(true);
     const { data: saved, error } = await safeAsync(async () => saveImageToAppDir(uri, 'closet'), 'AddItemScreen.saveImage');
     if (error || !saved) {
-      Alert.alert('Save failed', 'Image save failed. Please retry.');
+      setIsSaving(false);
+      setErrorHint('Could not save image. Please try again.');
       return;
     }
 
     if (editingItem) {
-      await updateItem(editingItem.id, {
+      await updateItem(editingItem.id, normalizeClothingItem({
+        ...editingItem,
         imagePath: saved,
         category: labelToCategory(categoryLabel),
         colorHsl,
         colorHex,
         pattern,
         styleType,
-      });
-      Alert.alert('Updated', 'Item updated in your closet.');
+        season,
+        userCorrected: 1,
+      }));
+      showToast('Item updated');
+      await safeAsync(async () => FileSystem.deleteAsync(uri, { idempotent: true }), 'AddItemScreen.cleanupTempUri');
+      setUri(null);
+      setIsSaving(false);
       navigation.goBack();
     } else {
-      await addItem({
+      await addItem(normalizeClothingItem({
         id: `item-${Date.now()}`,
         imagePath: saved,
         category: labelToCategory(categoryLabel),
@@ -184,45 +379,31 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
         colorHex,
         pattern,
         styleType,
-        season: null,
+        season,
+        userCorrected: 1,
         timesWorn: 0,
         lastWorn: null,
         createdAt: new Date().toISOString(),
-      });
+      }));
 
-      Alert.alert('Added', 'Item saved to your closet.');
+      showToast('Saved to closet');
+      await safeAsync(async () => FileSystem.deleteAsync(uri, { idempotent: true }), 'AddItemScreen.cleanupTempUri');
+      setUri(null);
+      setIsSaving(false);
       navigation.goBack();
     }
-
-    await safeAsync(async () => FileSystem.deleteAsync(uri, { idempotent: true }), 'AddItemScreen.cleanupTempUri');
-    setUri(null);
   };
-
-  if (!permission) {
-    return <View style={styles.screen} />;
-  }
-
-  if (!permission.granted) {
-    return (
-      <View style={styles.permissionWrap}>
-        <Text style={styles.permissionText}>Camera access is required to scan items.</Text>
-        <Pressable onPress={() => requestPermission()}>
-          <LinearGradient colors={['#e6c487', '#c9a96e']} style={styles.permissionBtn}>
-            <Text style={styles.permissionBtnText}>Enable Camera</Text>
-          </LinearGradient>
-        </Pressable>
-      </View>
-    );
-  }
 
   return (
     <View style={styles.screen}>
-      <CameraView
-        ref={cameraRef}
-        style={styles.camera}
-        facing="back"
-        flash={flashOn ? 'on' : 'off'}
-      />
+      {isWeb || !permission?.granted ? <View style={styles.cameraFallback} /> : (
+        <CameraView
+          ref={cameraRef}
+          style={styles.camera}
+          facing="back"
+          flash={flashOn ? 'on' : 'off'}
+        />
+      )}
 
       <Animated.View
         pointerEvents="none"
@@ -244,11 +425,22 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
         </BlurView>
       </Pressable>
 
-      <Pressable style={styles.flashBtn} onPress={() => setFlashOn((s) => !s)}>
-        <BlurView intensity={30} tint="dark" style={styles.iconBlur}>
-          <MaterialIcons name="flash-on" size={22} color="#e5e2e1" />
-        </BlurView>
-      </Pressable>
+      {!isWeb && permission?.granted ? (
+        <Pressable style={styles.flashBtn} onPress={() => setFlashOn((s) => !s)}>
+          <BlurView intensity={30} tint="dark" style={styles.iconBlur}>
+            <MaterialIcons name={flashOn ? 'flash-on' : 'flash-off'} size={22} color="#e5e2e1" />
+          </BlurView>
+        </Pressable>
+      ) : null}
+
+      {!isWeb && cameraDenied ? (
+        <View style={styles.permissionBanner}>
+          <Text style={styles.permissionBannerText}>Camera permission denied</Text>
+          <Pressable style={styles.permissionBannerBtn} onPress={openSystemSettings}>
+            <Text style={styles.permissionBannerBtnText}>Open Settings</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       <View style={styles.frameWrap} pointerEvents="none">
         <View style={[styles.overlay, { bottom: frameHeight + 8 }]} />
@@ -256,7 +448,7 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
         <View style={[styles.overlayLeft, { width: (width - frameWidth) / 2 - 4 }]} />
         <View style={[styles.overlayRight, { width: (width - frameWidth) / 2 - 4 }]} />
 
-        <View style={[styles.guideFrame, { width: frameWidth, height: frameHeight }]}> 
+        <View style={[styles.guideFrame, { width: frameWidth, height: frameHeight }]}>
           <View style={[styles.corner, styles.cornerTopLeft]} />
           <View style={[styles.corner, styles.cornerTopRight]} />
           <View style={[styles.corner, styles.cornerBottomLeft]} />
@@ -266,11 +458,19 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
       </View>
 
       {!uri ? (
-        <Pressable style={styles.captureBtn} onPress={takePhoto}>
-          <LinearGradient colors={['#e6c487', '#c9a96e']} style={styles.captureBtnInner}>
-            <MaterialIcons name="photo-camera" size={24} color="#261900" />
-          </LinearGradient>
-        </Pressable>
+        <View style={styles.captureActionsWrap}>
+          <Pressable style={styles.captureBtn} onPress={takePhoto}>
+            <LinearGradient colors={['#e6c487', '#c9a96e']} style={styles.captureBtnInner}>
+              <MaterialIcons name={isWeb ? 'upload-file' : 'photo-camera'} size={20} color="#261900" />
+              <Text style={styles.captureBtnLabel}>Camera</Text>
+            </LinearGradient>
+          </Pressable>
+
+          <Pressable style={styles.captureSecondaryBtn} onPress={chooseFromGallery}>
+            <MaterialIcons name={isWeb ? 'upload-file' : 'photo-library'} size={20} color="#e5e2e1" />
+            <Text style={styles.captureSecondaryText}>Gallery</Text>
+          </Pressable>
+        </View>
       ) : null}
 
       {uri ? (
@@ -279,20 +479,48 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
           <Animated.View style={[styles.sheet, { transform: [{ translateY: sheetY }] }]}>
             <View style={styles.handle} />
 
-            <View style={styles.sheetHeaderRow}>
-              <View style={styles.thumbWrap}>
-                <Image source={{ uri }} style={styles.thumbImage} resizeMode="cover" />
-              </View>
-
-              <View style={styles.sheetHeaderTextWrap}>
-                <Text style={styles.sheetTitle}>New Treasure</Text>
-                <Text style={styles.sheetSubtitle}>
-                  AI has detected: <Text style={styles.detectedText}>{detectedLabel}</Text>
-                </Text>
-              </View>
+            <View style={styles.previewWrap}>
+              <Image source={{ uri }} style={styles.previewImage} resizeMode="cover" />
             </View>
 
-            <Text style={styles.groupLabel}>CATEGORY</Text>
+            {isAnalyzing ? (
+              <View style={styles.analyzingRow}>
+                <ActivityIndicator color="#e6c487" size="small" />
+                <Text style={styles.analyzingText}>Analyzing item...</Text>
+              </View>
+            ) : null}
+
+            <View style={styles.sheetHeaderTextWrap}>
+              <Text style={styles.sheetTitle}>{editingItem ? 'Edit Item' : 'New Item'}</Text>
+              <Text style={styles.sheetSubtitle}>
+                Auto-detected: <Text style={styles.detectedText}>{detectedLabel}</Text>
+              </Text>
+              <Text style={styles.sheetConfidence}>
+                Confidence: <Text style={styles.detectedText}>{detectionConfidence.toUpperCase()}</Text>
+              </Text>
+            </View>
+
+            <Text style={styles.groupLabel}>Category</Text>
+            {errorHint ? (
+              <View style={styles.errorHint}>
+                <MaterialIcons name="info-outline" size={14} color="#e6c487" />
+                <Text style={styles.errorHintText}>{errorHint}</Text>
+              </View>
+            ) : null}
+            {showDetectionHint && !errorHint ? (
+              <View style={[styles.detectionHint, hintAcknowledged ? styles.detectionHintAcknowledged : null]}>
+                <MaterialIcons
+                  name={hintAcknowledged ? 'check-circle' : 'info-outline'}
+                  size={14}
+                  color={hintAcknowledged ? '#95d5a8' : '#e6c487'}
+                />
+                <Text style={styles.detectionHintText}>
+                  {hintAcknowledged
+                    ? 'Thanks. Your manual category selection will be saved.'
+                    : 'This detection has low confidence. Please confirm the category before saving.'}
+                </Text>
+              </View>
+            ) : null}
             <View style={styles.pillWrap}>
               {CATEGORY_OPTIONS.map((option) => {
                 const selected = categoryLabel === option;
@@ -308,17 +536,49 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
               })}
             </View>
 
-            <Text style={styles.groupLabel}>FIT & OCCASION</Text>
+            <Text style={styles.groupLabel}>Style (multi-select)</Text>
             <View style={styles.pillWrap}>
-              {FIT_OPTIONS.map((option) => {
-                const selected = fitChoice === option;
+              {STYLE_OPTIONS.map((option) => {
+                const selected = styleSelections.includes(option);
                 return (
                   <Pressable
                     key={option}
-                    onPress={() => setFitChoice(option)}
+                    onPress={() => toggleStyle(option)}
                     style={[styles.pill, selected ? styles.pillSelected : styles.pillUnselected]}
                   >
-                    <Text style={[styles.pillText, selected ? styles.pillTextSelected : styles.pillTextUnselected]}>{option}</Text>
+                    <Text style={[styles.pillText, selected ? styles.pillTextSelected : styles.pillTextUnselected]}>{formatLabel(option)}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Text style={styles.groupLabel}>Pattern</Text>
+            <View style={styles.pillWrap}>
+              {PATTERN_OPTIONS.map((option) => {
+                const selected = pattern === option;
+                return (
+                  <Pressable
+                    key={option}
+                    onPress={() => setPattern(option)}
+                    style={[styles.pill, selected ? styles.pillSelected : styles.pillUnselected]}
+                  >
+                    <Text style={[styles.pillText, selected ? styles.pillTextSelected : styles.pillTextUnselected]}>{formatLabel(option)}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Text style={styles.groupLabel}>Season</Text>
+            <View style={styles.pillWrap}>
+              {SEASON_OPTIONS.map((option) => {
+                const selected = season === option;
+                return (
+                  <Pressable
+                    key={option}
+                    onPress={() => setSeason(option)}
+                    style={[styles.pill, selected ? styles.pillSelected : styles.pillUnselected]}
+                  >
+                    <Text style={[styles.pillText, selected ? styles.pillTextSelected : styles.pillTextUnselected]}>{formatLabel(option)}</Text>
                   </Pressable>
                 );
               })}
@@ -327,6 +587,7 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
             <Animated.View style={{ transform: [{ scale: saveScale }] }}>
               <Pressable
                 onPress={save}
+                disabled={isAnalyzing || isSaving}
                 onPressIn={() => Animated.spring(saveScale, { toValue: 0.95, useNativeDriver: true, bounciness: 0 }).start()}
                 onPressOut={() => Animated.spring(saveScale, { toValue: 1, useNativeDriver: true, bounciness: 0 }).start()}
               >
@@ -336,7 +597,8 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
                   end={{ x: 1, y: 1 }}
                   style={styles.saveBtn}
                 >
-                  <Text style={styles.saveBtnText}>Save to Closet</Text>
+                  {(isAnalyzing || isSaving) ? <ActivityIndicator color="#261900" size="small" /> : null}
+                  <Text style={styles.saveBtnText}>{isAnalyzing ? 'Analyzing...' : isSaving ? 'Saving...' : 'Save to Closet'}</Text>
                 </LinearGradient>
               </Pressable>
             </Animated.View>
@@ -362,7 +624,11 @@ export default function AddItemScreen({ route, navigation }: Props): React.JSX.E
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: '#131313',
+  },
+  cameraFallback: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#1c1b1b',
   },
   camera: {
     ...StyleSheet.absoluteFillObject,
@@ -397,6 +663,40 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 32,
     right: 24,
+  },
+  permissionBanner: {
+    position: 'absolute',
+    top: 96,
+    left: 20,
+    right: 20,
+    borderRadius: 12,
+    backgroundColor: 'rgba(24,24,24,0.95)',
+    borderWidth: 1,
+    borderColor: 'rgba(230,196,135,0.30)',
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  permissionBannerText: {
+    color: '#e5e2e1',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+    flex: 1,
+  },
+  permissionBannerBtn: {
+    borderRadius: 9999,
+    backgroundColor: '#c9a96e',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  permissionBannerBtnText: {
+    color: '#261900',
+    fontFamily: 'Inter_700Bold',
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
   },
   frameWrap: {
     ...StyleSheet.absoluteFillObject,
@@ -469,18 +769,53 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
   },
   captureBtn: {
-    position: 'absolute',
-    bottom: 52,
     alignSelf: 'center',
   },
-  captureBtnInner: {
-    width: 78,
-    height: 78,
-    borderRadius: 39,
+  captureActionsWrap: {
+    position: 'absolute',
+    bottom: 52,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 14,
+    paddingHorizontal: 20,
+  },
+  captureSecondaryBtn: {
+    height: 52,
+    borderRadius: 9999,
+    paddingHorizontal: 18,
+    backgroundColor: 'rgba(32,31,31,0.90)',
+    borderWidth: 1,
+    borderColor: 'rgba(229,226,225,0.12)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  captureSecondaryText: {
+    color: '#e5e2e1',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+    letterSpacing: 0.5,
+  },
+  captureBtnInner: {
+    width: 112,
+    height: 78,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
     borderWidth: 4,
     borderColor: 'rgba(14,14,14,0.40)',
+  },
+  captureBtnLabel: {
+    color: '#261900',
+    fontFamily: 'Inter_700Bold',
+    fontSize: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
   },
   scrim: {
     ...StyleSheet.absoluteFillObject,
@@ -502,6 +837,29 @@ const styles = StyleSheet.create({
     shadowRadius: 30,
     shadowOffset: { width: 0, height: -10 },
     elevation: 20,
+  },
+  previewWrap: {
+    width: '100%',
+    borderRadius: 10,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(77,70,58,0.15)',
+    marginBottom: 12,
+  },
+  previewImage: {
+    width: '100%',
+    height: 220,
+  },
+  analyzingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  analyzingText: {
+    color: '#e6c487',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
   },
   handle: {
     width: 48,
@@ -549,10 +907,61 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 14,
   },
+  sheetConfidence: {
+    color: '#a9a39a',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
   detectedText: {
     color: '#e6c487',
     fontFamily: 'Inter_400Regular',
     fontStyle: 'italic',
+  },
+  detectionHint: {
+    marginTop: -2,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(230,196,135,0.35)',
+    backgroundColor: 'rgba(230,196,135,0.08)',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  detectionHintAcknowledged: {
+    borderColor: 'rgba(149,213,168,0.35)',
+    backgroundColor: 'rgba(149,213,168,0.10)',
+  },
+  detectionHintText: {
+    flex: 1,
+    color: '#d0c5b5',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  errorHint: {
+    marginTop: -2,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(220,38,38,0.45)',
+    backgroundColor: 'rgba(220,38,38,0.12)',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  errorHintText: {
+    flex: 1,
+    color: '#f3d1d1',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+    lineHeight: 18,
   },
   groupLabel: {
     marginBottom: 12,

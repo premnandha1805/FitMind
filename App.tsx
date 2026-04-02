@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Text, View, StyleSheet, AppState, AppStateStatus } from 'react-native';
+import { ActivityIndicator, Text, View, StyleSheet, AppState, AppStateStatus, Platform } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
+import Constants from 'expo-constants';
 import * as SplashScreen from 'expo-splash-screen';
 import {
   NotoSerif_400Regular,
@@ -17,15 +18,18 @@ import {
 } from '@expo-google-fonts/inter';
 import { PlayfairDisplay_700Bold_Italic } from '@expo-google-fonts/playfair-display';
 import NetInfo from '@react-native-community/netinfo';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AppNavigator from './src/navigation/AppNavigator';
 import { initializeDatabase } from './src/db/migrations';
 import { OfflineBanner } from './src/components/OfflineBanner';
 import { useUserStore } from './src/store/useUserStore';
 import { useTasteStore } from './src/store/useTasteStore';
+import { useClosetStore } from './src/store/useClosetStore';
 import { safeAsync } from './src/utils/safeAsync';
 import GeminiKeySetupScreen from './src/screens/GeminiKeySetupScreen';
 import { validateGeminiKey } from './src/services/gemini';
 import { retryQueuedFeedback } from './src/services/feedbackEngine';
+import { cleanExpiredCache } from './src/services/cacheEngine';
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -60,14 +64,39 @@ export default function App(): React.JSX.Element | null {
     });
 
     safeAsync(async () => {
-      await initializeDatabase();
+      const rawKey = Constants.expoConfig?.extra?.geminiApiKey as string | undefined;
+      const key = typeof rawKey === 'string' ? rawKey.trim() : '';
+      const configured = Boolean(key) && key.toLowerCase() !== 'paste_your_key_here_no_quotes';
+      console.log('Gemini key configured:', configured);
+
+      if (Platform.OS !== 'web') {
+        // a. (Fonts handled by useFonts above)
+        // b. Clean expired cache
+        await cleanExpiredCache();
+        // c. Initialize SQLite DB
+        await initializeDatabase();
+        console.log('[App] DB & Cache ready');
+      }
+
+      // f. Load user profile
       await loadUser();
       await refreshTaste();
+
+      // d. Run category migration on existing items
+      if (Platform.OS !== 'web') {
+        await useClosetStore.getState().loadItems();
+        await useClosetStore.getState().migrateCategories();
+        console.log('[App] Closet items migrated');
+      }
+
+      // e. Validate Gemini key
       const shouldValidateGemini = useUserStore.getState().profile?.onboarded === 1;
       if (shouldValidateGemini) {
-        const valid = await validateGeminiKey();
-        setKeyValid(valid);
+        const { data: valid } = await safeAsync(async () => validateGeminiKey(), 'App.validateGeminiKey');
+        setKeyValid(Boolean(valid));
       }
+
+      // g. Show first screen
       setReady(true);
     }, 'App.bootstrapInit');
 
@@ -97,16 +126,18 @@ export default function App(): React.JSX.Element | null {
   }
 
   return (
-    <View style={styles.root}>
-      <OfflineBanner visible={offline} />
-      {(keyValid || profile?.onboarded !== 1) ? <AppNavigator /> : <GeminiKeySetupScreen onValid={() => setKeyValid(true)} />}
-      <StatusBar style="dark" />
-    </View>
+    <SafeAreaProvider>
+      <View style={styles.root}>
+        <OfflineBanner visible={offline} />
+        {(keyValid || profile?.onboarded !== 1) ? <AppNavigator /> : <GeminiKeySetupScreen onValid={() => setKeyValid(true)} />}
+        <StatusBar style="light" />
+      </View>
+    </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#fff' },
-  loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10, backgroundColor: '#fff' },
-  loadingText: { color: '#334155', fontWeight: '600' },
+  root: { flex: 1, backgroundColor: '#131313' },
+  loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10, backgroundColor: '#131313' },
+  loadingText: { color: '#d0c5b5', fontWeight: '600' },
 });

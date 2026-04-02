@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Animated, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Image, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import { FitCheckResult } from '../types/models';
@@ -44,14 +44,29 @@ function ScoreCard({ title, verdict, badgeBackground, badgeTextColor, score, rea
 }
 
 export function FitReport({ report, onSwapReject, onSwapUse, onRate, swapImageUri, ratingCaptured }: Props): React.JSX.Element {
-  const firstSwap = report.swap_suggestions[0] ?? null;
-  const [swapUsePressed, setSwapUsePressed] = useState(false);
-  const [swapRejectPressed, setSwapRejectPressed] = useState(false);
+  const { width } = useWindowDimensions();
+  const compact = width < 380;
+  const swapCardWidth = Math.min(320, Math.max(width - 40, 260));
+
+  const [swapUsePressed, setSwapUsePressed] = useState<Record<number, boolean>>({});
+  const [swapRejectPressed, setSwapRejectPressed] = useState<Record<number, boolean>>({});
   const [hoveredReaction, setHoveredReaction] = useState<string | null>(null);
   const [ratingHidden, setRatingHidden] = useState(false);
   const ratingOpacity = useRef(new Animated.Value(1)).current;
 
-  const stylingInsights = useMemo(() => report.styling_tips.slice(0, 3), [report.styling_tips]);
+  const stylingInsights = useMemo(() => (report.styling_tips ?? []).slice(0, 3), [report.styling_tips]);
+  const whatWorks = useMemo(() => (report.what_works ?? []).slice(0, 4), [report.what_works]);
+  const swapSuggestions = useMemo(() => (report.swap_suggestions ?? []).slice(0, 6), [report.swap_suggestions]);
+
+  const formatScore = (value: number): string => {
+    const rounded = Math.round(value * 10) / 10;
+    return Number.isInteger(rounded) ? `${rounded.toFixed(0)}` : `${rounded.toFixed(1)}`;
+  };
+
+  const fallbackVerdict = (value: string, fallback: string): string => {
+    const trimmed = value.trim();
+    return trimmed.length ? trimmed : fallback;
+  };
 
   const triggerRating = (rating: 'loved' | 'fine' | 'notGreat'): void => {
     if (ratingCaptured || ratingHidden) return;
@@ -67,43 +82,54 @@ export function FitReport({ report, onSwapReject, onSwapUse, onRate, swapImageUr
     <View style={styles.wrap}>
       <View style={styles.overallBlock}>
         <Text style={styles.overallLabel}>OVERALL STYLE SCORE</Text>
-        <Text style={styles.overallValue}>8/10</Text>
+        <Text style={[styles.overallValue, compact ? styles.overallValueCompact : null]}>{formatScore(report.style_score)}/10</Text>
+        <Text style={styles.oneLineVerdict}>{report.one_line_verdict}</Text>
+      </View>
+
+      <View style={styles.whatWorksCard}>
+        <Text style={styles.whatWorksLabel}>WHAT WORKS</Text>
+        {whatWorks.map((tip, index) => (
+          <View key={`what-works-${index}-${tip.slice(0, 24)}`} style={styles.whatWorksRow}>
+            <MaterialIcons name="check-circle" size={16} color="#22c55e" style={styles.tipIcon} />
+            <Text style={styles.whatWorksText}>{tip}</Text>
+          </View>
+        ))}
       </View>
 
       <View style={styles.cardsStack}>
         <ScoreCard
           title="SKIN TONE MATCH"
-          verdict="EXCELLENT"
+          verdict={fallbackVerdict(report.skin_tone_match.verdict, 'Flattering').toUpperCase()}
           badgeBackground="rgba(52,211,153,0.10)"
           badgeTextColor="#34d399"
-          score={9}
-          reason="warm undertones complement skin"
+          score={report.skin_tone_match.score}
+          reason={report.skin_tone_match.reason}
         />
 
         <ScoreCard
           title="COLOR HARMONY"
-          verdict="HIGH BALANCE"
+          verdict={fallbackVerdict(report.color_harmony.verdict, 'High Balance').toUpperCase()}
           badgeBackground="rgba(230,196,135,0.10)"
           badgeTextColor="#e6c487"
-          score={8.5}
-          reason="monochromatic palette cohesive"
+          score={report.color_harmony.score}
+          reason={report.color_harmony.reason}
         />
 
         <ScoreCard
           title="PROPORTION"
-          verdict="TRENDING"
+          verdict={fallbackVerdict(report.proportion.verdict, 'Trending').toUpperCase()}
           badgeBackground="#353534"
           badgeTextColor="#d0c5b5"
-          score={7}
-          reason={'The oversized blazer is trending, but consider\ncinching the waist to maintain your silhouette.'}
+          score={report.proportion.score}
+          reason={report.proportion.reason}
           reasonItalic
         />
       </View>
 
       <View style={styles.colorTipsCard}>
         <Text style={styles.colorTipsLabel}>COLOR TIPS</Text>
-        {report.color_tips.map((tip) => (
-          <View key={tip} style={styles.tipRow}>
+        {(report.color_tips ?? []).map((tip, index) => (
+          <View key={`color-tip-${index}-${tip.slice(0, 24)}`} style={styles.tipRow}>
             <MaterialIcons name="check-circle" size={16} color="#543d0c" style={styles.tipIcon} />
             <Text style={styles.tipText}>{tip}</Text>
           </View>
@@ -111,7 +137,7 @@ export function FitReport({ report, onSwapReject, onSwapUse, onRate, swapImageUr
       </View>
 
       <View style={styles.insightsWrap}>
-        <Text style={styles.insightsLabel}>STYLING INSIGHTS</Text>
+        <Text style={styles.insightsLabel}>STYLING TIPS</Text>
         <View style={styles.insightsStack}>
           {stylingInsights.map((tip, idx) => (
             <View key={`${tip}-${idx}`} style={styles.insightCard}>
@@ -122,67 +148,80 @@ export function FitReport({ report, onSwapReject, onSwapUse, onRate, swapImageUr
         </View>
       </View>
 
-      {firstSwap ? (
-        <View style={styles.swapCard}>
-          <View style={styles.swapMedia}>
-            {swapImageUri ? (
-              <Image source={{ uri: swapImageUri }} style={styles.swapImage} resizeMode="cover" />
-            ) : (
-              <View style={[styles.swapImage, styles.swapFallback]}>
-                <MaterialIcons name="checkroom" size={34} color="#d0c5b5" />
-              </View>
-            )}
+      {swapSuggestions.length ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.swapRail}
+        >
+          {swapSuggestions.map((swap, index) => (
+            <View key={`${swap.item_type}-${index}`} style={[styles.swapCard, { width: swapCardWidth }]}>
+              <View style={styles.swapMedia}>
+                {index === 0 && swapImageUri ? (
+                  <Image source={{ uri: swapImageUri }} style={styles.swapImage} resizeMode="cover" />
+                ) : (
+                  <View style={[styles.swapImage, styles.swapFallback]}>
+                    <MaterialIcons name="checkroom" size={34} color="#d0c5b5" />
+                  </View>
+                )}
 
-            <LinearGradient
-              colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.80)']}
-              start={{ x: 0.5, y: 0 }}
-              end={{ x: 0.5, y: 1 }}
-              style={styles.swapOverlay}
-            />
-
-            <View style={styles.swapMediaContent}>
-              <Text style={styles.swapFromLabel}>FROM YOUR CLOSET</Text>
-              <Text style={styles.swapItemName}>{firstSwap.item_type}</Text>
-            </View>
-          </View>
-
-          <View style={styles.swapBody}>
-            <Text style={styles.swapQuote}>{firstSwap.reason}</Text>
-
-            <View style={styles.swapActions}>
-              <Pressable
-                onPress={() => onSwapUse(firstSwap.item_type)}
-                onPressIn={() => setSwapUsePressed(true)}
-                onPressOut={() => setSwapUsePressed(false)}
-                style={[styles.swapActionSlot, { transform: [{ scale: swapUsePressed ? 0.95 : 1 }] }]}
-              >
                 <LinearGradient
-                  colors={['#e6c487', '#c9a96e']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={styles.swapUseBtn}
-                >
-                  <Text style={styles.swapUseText}>Use This Swap</Text>
-                </LinearGradient>
-              </Pressable>
+                  colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.80)']}
+                  start={{ x: 0.5, y: 0 }}
+                  end={{ x: 0.5, y: 1 }}
+                  style={styles.swapOverlay}
+                />
 
-              <Pressable
-                onPress={() => onSwapReject(firstSwap.item_type)}
-                onPressIn={() => setSwapRejectPressed(true)}
-                onPressOut={() => setSwapRejectPressed(false)}
-                style={[styles.swapActionSlot, styles.swapRejectBtn, { transform: [{ scale: swapRejectPressed ? 0.95 : 1 }] }]}
-              >
-                <Text style={styles.swapRejectText}>Not for me</Text>
-              </Pressable>
+                <View style={styles.swapMediaContent}>
+                  <Text style={styles.swapFromLabel}>SWAP SUGGESTION</Text>
+                  <Text style={styles.swapItemName}>{swap.item_type}</Text>
+                </View>
+              </View>
+
+              <View style={styles.swapBody}>
+                {swap.current_issue ? (
+                  <Text style={styles.swapQuote}>{swap.current_issue}</Text>
+                ) : null}
+                <Text style={styles.swapColorLine}>Try: {swap.suggested_color ?? swap.color ?? 'a better matching tone'}</Text>
+                <Text style={styles.swapReasonLine}>{swap.reason}</Text>
+
+                <View style={[styles.swapActions, compact ? styles.swapActionsCompact : null]}>
+                  <Pressable
+                    onPress={() => onSwapUse(swap.item_type)}
+                    onPressIn={() => setSwapUsePressed((prev) => ({ ...prev, [index]: true }))}
+                    onPressOut={() => setSwapUsePressed((prev) => ({ ...prev, [index]: false }))}
+                    style={[styles.swapActionSlot, { transform: [{ scale: swapUsePressed[index] ? 0.95 : 1 }] }]}
+                  >
+                    <LinearGradient
+                      colors={['#e6c487', '#c9a96e']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={styles.swapUseBtn}
+                    >
+                      <Text style={styles.swapUseText}>Use This Swap</Text>
+                    </LinearGradient>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => onSwapReject(swap.item_type)}
+                    onPressIn={() => setSwapRejectPressed((prev) => ({ ...prev, [index]: true }))}
+                    onPressOut={() => setSwapRejectPressed((prev) => ({ ...prev, [index]: false }))}
+                    style={[styles.swapActionSlot, styles.swapRejectBtn, { transform: [{ scale: swapRejectPressed[index] ? 0.95 : 1 }] }]}
+                  >
+                    <Text style={styles.swapRejectText}>Not for me</Text>
+                  </Pressable>
+                </View>
+              </View>
             </View>
-          </View>
-        </View>
+          ))}
+        </ScrollView>
       ) : null}
 
       {!ratingHidden && !ratingCaptured ? (
         <Animated.View style={[styles.ratingWrap, { opacity: ratingOpacity }]}>
           <Text style={styles.ratingLabel}>Did this match how you felt?</Text>
-          <View style={styles.ratingRow}>
+          <View style={[styles.ratingRow, compact ? styles.ratingRowCompact : null]}>
             {[
               { key: 'loved', emoji: '😍' },
               { key: 'fine', emoji: '👍' },
@@ -236,6 +275,44 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 8 },
     textShadowRadius: 18,
     lineHeight: 102,
+  },
+  overallValueCompact: {
+    fontSize: 72,
+    lineHeight: 78,
+  },
+  oneLineVerdict: {
+    marginTop: 8,
+    color: '#d0c5b5',
+    fontFamily: 'NotoSerif_400Regular_Italic',
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  whatWorksCard: {
+    backgroundColor: 'rgba(34,197,94,0.10)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(34,197,94,0.25)',
+    padding: 20,
+    gap: 10,
+  },
+  whatWorksLabel: {
+    color: '#86efac',
+    fontFamily: 'Inter_700Bold',
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 1.8,
+  },
+  whatWorksRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'flex-start',
+  },
+  whatWorksText: {
+    flex: 1,
+    color: '#d1fae5',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    lineHeight: 20,
   },
   cardsStack: {
     gap: 24,
@@ -377,11 +454,16 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   swapCard: {
+    width: 320,
     backgroundColor: '#201f1f',
     borderRadius: 16,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.05)',
+  },
+  swapRail: {
+    gap: 12,
+    paddingRight: 4,
   },
   swapMedia: {
     height: 256,
@@ -426,14 +508,27 @@ const styles = StyleSheet.create({
   },
   swapQuote: {
     color: '#d0c5b5',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  swapColorLine: {
+    color: '#e6c487',
+    fontFamily: 'Inter_700Bold',
+    fontSize: 13,
+  },
+  swapReasonLine: {
+    color: '#d0c5b5',
     fontFamily: 'Inter_400Regular',
-    fontSize: 14,
-    lineHeight: 22,
-    fontStyle: 'italic',
+    fontSize: 13,
+    lineHeight: 19,
   },
   swapActions: {
     flexDirection: 'row',
     gap: 12,
+  },
+  swapActionsCompact: {
+    flexDirection: 'column',
   },
   swapActionSlot: {
     flex: 1,
@@ -478,6 +573,11 @@ const styles = StyleSheet.create({
   ratingRow: {
     flexDirection: 'row',
     gap: 24,
+  },
+  ratingRowCompact: {
+    gap: 14,
+    flexWrap: 'wrap',
+    justifyContent: 'center',
   },
   ratingBtn: {
     padding: 16,

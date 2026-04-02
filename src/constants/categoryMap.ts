@@ -35,9 +35,10 @@ export const STYLE_MAP: Record<string, ClothingStyleType> = {
   party: 'party', night: 'party', festive: 'party',
   ethnic: 'ethnic', traditional: 'ethnic', cultural: 'ethnic',
   sports: 'sports', gym: 'sports', athletic: 'sports',
+  smart_casual: 'smart_casual', 'smart casual': 'smart_casual', 'smart-casual': 'smart_casual',
 };
 
-const PATTERN_MAP: Record<string, ClothingPattern> = {
+export const PATTERN_MAP: Record<string, ClothingPattern> = {
   solid: 'solid',
   stripe: 'stripes',
   stripes: 'stripes',

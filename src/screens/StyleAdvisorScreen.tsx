@@ -1,18 +1,23 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import { MainTabParamList } from '../navigation/types';
 import { executeSqlWithRetry } from '../db/queries';
 import { AdvisorMessage } from '../components/AdvisorMessage';
 import { MissingItemCard } from '../components/MissingItemCard';
@@ -81,6 +86,11 @@ const QUICK_CHIPS: Array<{ label: string; prompt: string }> = [
   { label: 'Night Out', prompt: 'Going out with friends tonight' },
   { label: 'Festive/Ethnic', prompt: 'Attending a traditional festival' },
 ];
+
+const PLANNER_OCCASIONS = ['Work', 'Date', 'Wedding', 'Party', 'Travel', 'Casual'] as const;
+const PLANNER_TIMES = ['Morning', 'Afternoon', 'Evening'] as const;
+const PLANNER_WEATHER = ['Warm', 'Crisp', 'Cold'] as const;
+const TAB_BAR_CLEARANCE = 92;
 
 function makeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -176,6 +186,10 @@ function ConfettiOverlay({ visible }: { visible: boolean }): React.JSX.Element |
 
 export default function StyleAdvisorScreen(): React.JSX.Element {
   const navigation = useNavigation();
+  const route = useRoute();
+  const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const compact = width < 380;
   const scrollRef = useRef<ScrollView | null>(null);
   const [input, setInput] = useState('');
   const [inputFocused, setInputFocused] = useState(false);
@@ -184,6 +198,19 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [confettiVisible, setConfettiVisible] = useState(false);
+  const [advisorMode, setAdvisorMode] = useState<'chat' | 'planner'>('chat');
+  const [plannerOccasion, setPlannerOccasion] = useState<(typeof PLANNER_OCCASIONS)[number]>('Casual');
+  const [plannerTime, setPlannerTime] = useState<(typeof PLANNER_TIMES)[number]>('Evening');
+  const [plannerWeather, setPlannerWeather] = useState<(typeof PLANNER_WEATHER)[number]>('Crisp');
+  const [plannerNotes, setPlannerNotes] = useState('');
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [inputHeight, setInputHeight] = useState(44);
+
+  const scrollToLatest = useCallback((animated = true) => {
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollToEnd({ animated });
+    });
+  }, []);
 
   const closetItems = useClosetStore((s) => s.items);
   const loadItems = useClosetStore((s) => s.loadItems);
@@ -201,6 +228,41 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
       }
     }, 'StyleAdvisorScreen.bootstrap');
   }, [closetItems.length, loadItems, refreshTaste, tasteProfile]);
+
+  useEffect(() => {
+    const params = route.params as MainTabParamList['StyleAdvisor'];
+    if (params?.initialMode === 'planner') {
+      setAdvisorMode('planner');
+    }
+  }, [route.params]);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardHeight(event.endCoordinates.height);
+      scrollToLatest(false);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [scrollToLatest]);
+
+  useEffect(() => {
+    scrollToLatest();
+  }, [messages.length, submitting, advisorMode, scrollToLatest]);
+
+  useEffect(() => {
+    if (inputFocused) {
+      scrollToLatest(false);
+    }
+  }, [input, inputFocused, scrollToLatest]);
 
   const startConfetti = (): void => {
     setConfettiVisible(true);
@@ -264,7 +326,13 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
     try {
       const extraction = contextOverride
         ? { context: contextOverride, usedFallback: false }
-        : await extractScenarioContext(userPrompt, user.skinToneId, user.skinUndertone);
+        : await extractScenarioContext(
+          userPrompt,
+          user.skinToneId,
+          user.skinUndertone,
+          tasteProfile.styleIdentity,
+          tasteProfile.lovedColors
+        );
 
       replaceMessage(typingId, {
         id: typingId,
@@ -297,37 +365,53 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
         usedFallback: extraction.usedFallback,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      const errorType = mapEngineError(message);
-
-      if (errorType === 'offline') {
-        replaceMessage(typingId, {
-          id: typingId,
-          type: 'error',
-          errorType,
-          text: 'Style Advisor needs internet to understand your situation. Please check your connection.',
-          prompt: userPrompt,
-          context: contextOverride,
-        });
-      } else if (errorType === 'rate_limit') {
-        replaceMessage(typingId, {
-          id: typingId,
-          type: 'error',
-          errorType,
-          text: "I've used today's AI quota. You can still use Quick Occasion Planner without internet.",
-          prompt: userPrompt,
-          context: contextOverride,
-        });
+      const errorText = String(error ?? '');
+      const mapped = mapEngineError(errorText);
+      if (mapped === 'gemini') {
+        console.error('[Screen] Error:', error);
       } else {
-        replaceMessage(typingId, {
-          id: typingId,
-          type: 'error',
-          errorType,
-          text: 'I had trouble analyzing your situation. Tap to try again.',
-          prompt: userPrompt,
-          context: contextOverride,
-        });
+        console.info('[Screen] Handled:', errorText);
       }
+      const fallbackContext: ScenarioContext = contextOverride ?? {
+        event_type: 'general event',
+        industry_context: 'general',
+        formality: 5,
+        setting: 'indoor',
+        culture_context: 'general',
+        weather_relevant: false,
+        upper_body_only: false,
+        time_of_day: 'evening',
+        avoid_colors: [],
+        priority_attributes: [],
+        occasion_category: 'casual',
+        power_level: 'approachable',
+        confidence_tip: 'Pick one clean silhouette and a calm base color.',
+        dress_code: 'smart casual',
+        missing_item_suggestions: [],
+        styling_notes: 'Keep the look clean, balanced, and context-appropriate.',
+      };
+
+      replaceMessage(typingId, {
+        id: typingId,
+        type: 'advisor',
+        response: {
+          outfit: null,
+          explanation: ['Using local fallback guidance while network is unstable.'],
+          confidenceTip: fallbackContext.confidence_tip,
+          missingItems: [],
+          videoCallMode: false,
+          formality: fallbackContext.formality,
+          eventType: fallbackContext.event_type,
+          allScores: null,
+          closestOutfit: null,
+          closestExplanation: [],
+        },
+        context: fallbackContext,
+        usedOutfitKeys,
+        originalPrompt: userPrompt,
+        isRefreshing: false,
+        usedFallback: true,
+      });
     } finally {
       setSubmitting(false);
     }
@@ -338,9 +422,11 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
     if (!trimmed || submitting) return;
 
     setInput('');
+    setInputHeight(44);
     Keyboard.dismiss();
 
     appendMessage({ id: makeId('user'), type: 'user', text: trimmed });
+    scrollToLatest(false);
 
     if (closetItems.length < 6) {
       appendMessage({
@@ -398,7 +484,13 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
       ) : null}
 
       {msg.errorType === 'rate_limit' ? (
-        <Pressable style={styles.linkBtn} onPress={() => navigation.navigate('Occasion' as never)}>
+        <Pressable
+          style={styles.linkBtn}
+          onPress={() => {
+            setAdvisorMode('planner');
+            scrollRef.current?.scrollTo({ y: 0, animated: true });
+          }}
+        >
           <Text style={styles.linkBtnText}>Open Quick Occasion Planner</Text>
         </Pressable>
       ) : null}
@@ -417,10 +509,14 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
   );
 
   return (
-    <View style={styles.screen}>
+    <KeyboardAvoidingView
+      style={styles.screen}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 8 : 0}
+    >
       <ConfettiOverlay visible={confettiVisible} />
 
-      <BlurView intensity={20} tint="dark" style={styles.header}>
+      <BlurView intensity={20} tint="dark" style={[styles.header, { paddingTop: insets.top }] }>
         <View style={styles.headerInner}>
           <View style={styles.headerLeft}>
             <View style={styles.avatarCircle}>
@@ -430,7 +526,7 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
           </View>
 
           <View style={styles.headerCenter}>
-            <Text style={styles.brandText}>FitMind</Text>
+            <Text style={[styles.brandText, { fontSize: compact ? 20 : 24 }]}>FitMind</Text>
             <MaterialIcons name="auto-awesome" size={18} color="#e6c487" style={styles.brandIcon} />
           </View>
 
@@ -438,8 +534,9 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
             style={[styles.headerIconBtn, { transform: [{ scale: headerPressed ? 0.95 : 1 }] }]}
             onPressIn={() => setHeaderPressed(true)}
             onPressOut={() => setHeaderPressed(false)}
+            onPress={() => navigation.navigate('Profile' as never)}
           >
-            <MaterialIcons name="face" size={18} color="#d0c5b5" />
+            <Ionicons name="person-outline" size={18} color="#d0c5b5" />
           </Pressable>
         </View>
       </BlurView>
@@ -447,7 +544,16 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
       <ScrollView
         ref={(r) => { scrollRef.current = r; }}
         style={styles.chat}
-        contentContainerStyle={styles.chatContent}
+        contentContainerStyle={[
+          styles.chatContent,
+          {
+            paddingBottom: advisorMode === 'planner'
+              ? Math.max(220, insets.bottom + TAB_BAR_CLEARANCE + 120 + (Platform.OS === 'android' ? Math.max(0, keyboardHeight - insets.bottom) : 0))
+              : Math.max(170, insets.bottom + TAB_BAR_CLEARANCE + 70 + (Platform.OS === 'android' ? Math.max(0, keyboardHeight - insets.bottom) : 0)),
+          },
+        ]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
       >
         <View style={styles.welcomeWrap}>
@@ -456,6 +562,117 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
             Describe your occasion, and I&apos;ll style you with confidence.
           </Text>
         </View>
+
+        <View style={styles.modeSwitchRow}>
+          <Pressable
+            style={[styles.modeSwitchBtn, advisorMode === 'chat' ? styles.modeSwitchBtnActive : null]}
+            onPress={() => setAdvisorMode('chat')}
+          >
+            <Text style={[styles.modeSwitchText, advisorMode === 'chat' ? styles.modeSwitchTextActive : null]}>Advisor Chat</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.modeSwitchBtn, advisorMode === 'planner' ? styles.modeSwitchBtnActive : null]}
+            onPress={() => setAdvisorMode('planner')}
+          >
+            <Text style={[styles.modeSwitchText, advisorMode === 'planner' ? styles.modeSwitchTextActive : null]}>Occasion Planner</Text>
+          </Pressable>
+        </View>
+
+        {advisorMode === 'planner' ? (
+          <View style={styles.plannerCard}>
+            <Text style={styles.plannerTitle}>Build Your Occasion</Text>
+
+            <Text style={styles.plannerLabel}>Occasion</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.plannerChipRow}
+            >
+              {PLANNER_OCCASIONS.map((option) => {
+                const active = plannerOccasion === option;
+                return (
+                  <Pressable
+                    key={option}
+                    style={[styles.plannerChip, active ? styles.plannerChipActive : null]}
+                    onPress={() => setPlannerOccasion(option)}
+                  >
+                    <Text style={[styles.plannerChipText, active ? styles.plannerChipTextActive : null]}>{option}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <View style={[styles.plannerContextRow, { flexDirection: compact ? 'column' : 'row' }]}>
+              <View style={styles.plannerContextCol}>
+                <Text style={styles.plannerLabel}>Time</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={styles.plannerChipRow}
+                >
+                  {PLANNER_TIMES.map((option) => {
+                    const active = plannerTime === option;
+                    return (
+                      <Pressable
+                        key={option}
+                        style={[styles.plannerChip, active ? styles.plannerChipActive : null]}
+                        onPress={() => setPlannerTime(option)}
+                      >
+                        <Text style={[styles.plannerChipText, active ? styles.plannerChipTextActive : null]}>{option}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              <View style={styles.plannerContextCol}>
+                <Text style={styles.plannerLabel}>Weather</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={styles.plannerChipRow}
+                >
+                  {PLANNER_WEATHER.map((option) => {
+                    const active = plannerWeather === option;
+                    return (
+                      <Pressable
+                        key={option}
+                        style={[styles.plannerChip, active ? styles.plannerChipActive : null]}
+                        onPress={() => setPlannerWeather(option)}
+                      >
+                        <Text style={[styles.plannerChipText, active ? styles.plannerChipTextActive : null]}>{option}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            </View>
+
+            <View style={styles.plannerInputWrap}>
+              <TextInput
+                value={plannerNotes}
+                onChangeText={setPlannerNotes}
+                placeholder="Add details (venue, vibe, dress code)"
+                placeholderTextColor="rgba(208,197,181,0.80)"
+                style={styles.plannerInput}
+              />
+            </View>
+
+            <Pressable
+              style={styles.plannerGenerateBtn}
+              onPress={() => {
+                const prompt = `Create an outfit for ${plannerOccasion}, ${plannerTime}, ${plannerWeather}. ${plannerNotes}`;
+                void sendPrompt(prompt);
+              }}
+              disabled={submitting}
+            >
+              <Text style={styles.plannerGenerateText}>Generate From Planner</Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         {messages.map((msg) => {
           if (msg.type === 'user') {
@@ -523,9 +740,24 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
         })}
       </ScrollView>
 
-      <View style={styles.inputWrap}>
+      <View
+        style={[
+          styles.inputWrap,
+          {
+            paddingBottom: Math.max(
+              10,
+              insets.bottom + TAB_BAR_CLEARANCE - 16 + (Platform.OS === 'android' ? Math.max(0, keyboardHeight - insets.bottom) : 0)
+            ),
+          },
+        ]}
+      >
         <LinearGradient colors={['#131313', 'rgba(19,19,19,0)']} start={{ x: 0, y: 1 }} end={{ x: 0, y: 0 }} style={styles.chipsGradient}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.chipsRow}
+          >
             {QUICK_CHIPS.map((chip) => {
               const active = selectedChip === chip.label;
 
@@ -552,21 +784,33 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
           </View>
           <TextInput
             value={input}
-            onChangeText={setInput}
+            onChangeText={(text) => {
+              setInput(text);
+              if (inputFocused) {
+                scrollToLatest(false);
+              }
+            }}
             placeholder="Describe your situation..."
             placeholderTextColor="rgba(208,197,181,0.80)"
             style={styles.input}
             editable={!submitting}
+            multiline
+            blurOnSubmit={false}
+            textAlignVertical="top"
+            onContentSizeChange={(event) => {
+              const next = Math.max(44, Math.min(120, Math.ceil(event.nativeEvent.contentSize.height + 10)));
+              setInputHeight(next);
+            }}
+            scrollEnabled={inputHeight >= 120}
             onFocus={() => setInputFocused(true)}
             onBlur={() => setInputFocused(false)}
-            onSubmitEditing={() => { void sendPrompt(input); }}
           />
           <Pressable style={styles.sendBtn} disabled={submitting} onPress={() => { void sendPrompt(input); }}>
             <MaterialIcons name="arrow-upward" size={18} color="#1f1f1f" />
           </Pressable>
         </View>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -654,17 +898,126 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 21,
   },
+  modeSwitchRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 14,
+  },
+  modeSwitchBtn: {
+    flex: 1,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#4d463a',
+    backgroundColor: '#2a2a2a',
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modeSwitchBtnActive: {
+    borderColor: '#e6c487',
+    backgroundColor: 'rgba(230,196,135,0.12)',
+  },
+  modeSwitchText: {
+    color: '#d0c5b5',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  modeSwitchTextActive: {
+    color: '#f0ede9',
+  },
+  plannerCard: {
+    borderWidth: 1,
+    borderColor: 'rgba(230,196,135,0.20)',
+    borderRadius: 16,
+    backgroundColor: '#201f1f',
+    padding: 12,
+    marginBottom: 16,
+    gap: 10,
+  },
+  plannerTitle: {
+    color: '#e6c487',
+    fontFamily: 'NotoSerif_700Bold',
+    fontSize: 20,
+  },
+  plannerLabel: {
+    color: '#d0c5b5',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 10,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+  },
+  plannerChipRow: {
+    gap: 8,
+    paddingVertical: 2,
+    paddingRight: 8,
+  },
+  plannerChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#4d463a',
+    backgroundColor: '#2a2a2a',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  plannerChipActive: {
+    borderColor: '#e6c487',
+    backgroundColor: 'rgba(230,196,135,0.12)',
+  },
+  plannerChipText: {
+    color: '#d0c5b5',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+  },
+  plannerChipTextActive: {
+    color: '#f0ede9',
+  },
+  plannerContextRow: {
+    gap: 10,
+  },
+  plannerContextCol: {
+    flex: 1,
+    gap: 6,
+  },
+  plannerInputWrap: {
+    borderWidth: 1,
+    borderColor: '#4d463a',
+    borderRadius: 12,
+    backgroundColor: '#2a2a2a',
+    paddingHorizontal: 12,
+  },
+  plannerInput: {
+    color: '#f0ede9',
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    paddingVertical: 10,
+  },
+  plannerGenerateBtn: {
+    borderRadius: 999,
+    backgroundColor: '#c9a96e',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+  },
+  plannerGenerateText: {
+    color: '#261900',
+    fontFamily: 'Inter_700Bold',
+    fontSize: 13,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
   userRow: { alignItems: 'flex-end', marginBottom: 10 },
   userBubble: {
     maxWidth: '85%',
-    backgroundColor: '#2a2a2a',
+    backgroundColor: '#c9a96e',
     borderRadius: 16,
     borderBottomRightRadius: 6,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
   userText: {
-    color: '#f0ede9',
+    color: '#261900',
     fontFamily: 'Inter_500Medium',
     fontSize: 14,
     lineHeight: 21,
@@ -733,15 +1086,16 @@ const styles = StyleSheet.create({
   },
   inputRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-end',
     gap: 8,
     backgroundColor: '#2a2a2a',
-    borderRadius: 9999,
+    borderRadius: 22,
     borderWidth: 1,
     borderColor: '#4d463a',
     paddingLeft: 8,
     paddingRight: 4,
-    paddingVertical: 4,
+    paddingTop: 6,
+    paddingBottom: 6,
   },
   inputRowFocused: {
     borderColor: '#e6c487',
@@ -756,7 +1110,10 @@ const styles = StyleSheet.create({
     color: '#f0ede9',
     fontFamily: 'Inter_400Regular',
     fontSize: 14,
-    paddingVertical: 10,
+    minHeight: 44,
+    maxHeight: 120,
+    paddingTop: 10,
+    paddingBottom: 10,
   },
   sendBtn: {
     width: 36,
@@ -765,6 +1122,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#e6c487',
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: 2,
   },
   fallbackBanner: {
     borderWidth: 1,

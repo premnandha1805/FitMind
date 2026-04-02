@@ -11,8 +11,10 @@ import {
 import { StackScreenProps } from '@react-navigation/stack';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../navigation/types';
 import { useUserStore } from '../store/useUserStore';
+import { useResponsive } from '../utils/responsive';
 
 type Props = StackScreenProps<RootStackParamList, 'StylePreferences'>;
 
@@ -77,6 +79,8 @@ const STYLE_OPTIONS = [
 ] as const;
 
 export default function StylePreferencesScreen({ navigation }: Props): React.JSX.Element {
+  const insets = useSafeAreaInsets();
+  const { compact, rs } = useResponsive();
   const savePreferences = useUserStore((s) => s.savePreferences);
   const profile = useUserStore((s) => s.profile);
   const saveProfile = useUserStore((s) => s.saveProfile);
@@ -143,16 +147,24 @@ export default function StylePreferencesScreen({ navigation }: Props): React.JSX
   return (
     <View style={styles.screen}>
       <ScrollView
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[
+          styles.container,
+          {
+            paddingHorizontal: rs(24, 14, 28),
+            paddingTop: rs(32, 24, 40),
+            paddingBottom: Math.max(170, insets.bottom + rs(132, 118, 180)),
+          },
+        ]}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.title}>Tell us your style</Text>
-        <Text style={styles.subtitle}>Takes 30 seconds - makes suggestions much better</Text>
+        <Text style={[styles.title, { fontSize: rs(40, 30, 44) }]}>Tell us your style</Text>
+        <Text style={[styles.subtitle, { marginBottom: rs(48, 30, 52) }]}>Takes 30 seconds - makes suggestions much better</Text>
 
         <Text style={styles.sectionLabel}>COLORS YOU LOVE</Text>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
+          showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.colorsRail}
         >
           {COLOR_SWATCHES.map((swatch) => {
@@ -199,7 +211,7 @@ export default function StylePreferencesScreen({ navigation }: Props): React.JSX
         </View>
 
         <Text style={styles.sectionLabel}>FIT PREFERENCE</Text>
-        <View style={styles.fitGrid}>
+        <View style={[styles.fitGrid, compact ? styles.fitGridCompact : null]}>
           {FIT_OPTIONS.map((option) => {
             const selected = fitPreference === option.value;
             return (
@@ -265,6 +277,7 @@ export default function StylePreferencesScreen({ navigation }: Props): React.JSX
                 onHoverOut={() => setHoveredStyle(null)}
                 style={({ pressed }) => [
                   styles.identityCard,
+                  compact ? styles.identityCardCompact : null,
                   selected ? styles.identityCardSelected : null,
                   !selected && hoveredStyle === option.value ? styles.identityCardHover : null,
                   pressed ? styles.identityPressed : null,
@@ -292,7 +305,7 @@ export default function StylePreferencesScreen({ navigation }: Props): React.JSX
         colors={['rgba(19,19,19,0)', '#131313']}
         start={{ x: 0.5, y: 0 }}
         end={{ x: 0.5, y: 1 }}
-        style={styles.saveBar}
+        style={[styles.saveBar, { paddingHorizontal: rs(24, 14, 28), paddingBottom: Math.max(20, insets.bottom + 8) }]}
       >
         <Animated.View style={[styles.saveButtonWrap, { transform: [{ scale: saveScale }] }]}>
           <Pressable
@@ -301,6 +314,8 @@ export default function StylePreferencesScreen({ navigation }: Props): React.JSX
             onHoverOut={onSaveHoverOut}
             onPressIn={() => setSavePressed(true)}
             onPressOut={() => setSavePressed(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Save Preferences"
           >
             <LinearGradient
               colors={['#e6c487', '#c9a96e']}
@@ -417,6 +432,9 @@ const styles = StyleSheet.create({
     gap: 16,
     marginBottom: 36,
   },
+  fitGridCompact: {
+    flexDirection: 'column',
+  },
   fitCard: {
     flex: 1,
     aspectRatio: 4 / 5,
@@ -496,6 +514,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 24,
     position: 'relative',
+  },
+  identityCardCompact: {
+    width: '100%',
   },
   identityCardHover: {
     backgroundColor: '#2a2a2a',

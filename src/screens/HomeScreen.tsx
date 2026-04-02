@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, Image, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useOutfitStore } from '../store/useOutfitStore';
 import { dismissMorningCheckIn, getPendingMorningCheckIn, recordFitCheckRating, recordLiked, recordRejected, recordSkipped, recordWorn } from '../services/feedbackEngine';
 import { safeAsync } from '../utils/safeAsync';
@@ -21,6 +22,11 @@ function score(value: number): string {
 }
 
 export default function HomeScreen(): React.JSX.Element {
+  const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const compact = width < 380;
+  const collageHeight = compact ? 300 : 400;
+
   const outfits = useOutfitStore((s) => s.outfits);
   const note = useOutfitStore((s) => s.note);
   const loading = useOutfitStore((s) => s.loading);
@@ -128,11 +134,25 @@ export default function HomeScreen(): React.JSX.Element {
     return map;
   }, [closetItems]);
 
+  const hasNoClosetBasics = errorKind === 'noTopsOrBottoms';
+  const showGenericEmptyState = !loading && !visibleOutfits.length && !outfits.length && !hasNoClosetBasics;
+  const showWearBar = Boolean(activeOutfit) && !loading;
+
   return (
     <View style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>Today&apos;s Smart Picks</Text>
-        {note ? <Text style={styles.note}>{note}</Text> : null}
+      <ScrollView
+        contentContainerStyle={[
+          styles.container,
+          {
+            paddingTop: Math.max(8, insets.top + 2),
+            paddingHorizontal: compact ? 12 : 14,
+            paddingBottom: showWearBar ? Math.max(180, insets.bottom + 120) : Math.max(30, insets.bottom + 12),
+          },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={[styles.title, { fontSize: compact ? 21 : 24 }]}>Today&apos;s Smart Picks</Text>
+        {note && !hasNoClosetBasics ? <Text style={styles.note}>{note}</Text> : null}
 
         {errorKind === 'noTopsOrBottoms' ? (
           <ErrorCard
@@ -150,7 +170,7 @@ export default function HomeScreen(): React.JSX.Element {
             title="No occasion outfits found"
             description="Showing closest alternatives."
             actionText="OK"
-            onAction={() => {}}
+            onAction={() => { }}
           />
         ) : null}
 
@@ -160,7 +180,7 @@ export default function HomeScreen(): React.JSX.Element {
             title="We are still learning your taste"
             description="Add more feedback to improve suggestions."
             actionText="OK"
-            onAction={() => {}}
+            onAction={() => { }}
           />
         ) : null}
 
@@ -168,11 +188,11 @@ export default function HomeScreen(): React.JSX.Element {
           <View style={styles.morningCard}>
             <Text style={styles.morningTitle}>How did this outfit feel yesterday?</Text>
             <View style={styles.morningRow}>
-              <Pressable style={styles.morningBtn} onPress={() => onMorningRate('loved')}><Text>😍 Loved it</Text></Pressable>
-              <Pressable style={styles.morningBtn} onPress={() => onMorningRate('fine')}><Text>👍 It was fine</Text></Pressable>
-              <Pressable style={styles.morningBtn} onPress={() => onMorningRate('notGreat')}><Text>😐 Not great</Text></Pressable>
+              <Pressable style={styles.morningBtn} onPress={() => onMorningRate('loved')} accessibilityRole="button" accessibilityLabel="Loved it, morning check-in"><Text>😍 Loved it</Text></Pressable>
+              <Pressable style={styles.morningBtn} onPress={() => onMorningRate('fine')} accessibilityRole="button" accessibilityLabel="It was fine, morning check-in"><Text>👍 It was fine</Text></Pressable>
+              <Pressable style={styles.morningBtn} onPress={() => onMorningRate('notGreat')} accessibilityRole="button" accessibilityLabel="Not great, morning check-in"><Text>😐 Not great</Text></Pressable>
             </View>
-            <Pressable onPress={onMorningDismiss}>
+            <Pressable onPress={onMorningDismiss} accessibilityRole="button" accessibilityLabel="Dismiss morning check-in">
               <Text style={styles.dismiss}>Dismiss</Text>
             </Pressable>
           </View>
@@ -204,9 +224,9 @@ export default function HomeScreen(): React.JSX.Element {
               }}
             >
               <Pressable onPress={() => setActiveOutfitId(outfit.id)} style={styles.outfitCard}>
-                <Text style={[styles.outfitName, !isActive ? styles.outfitNameSecondary : null]}>{outfit.name}</Text>
+                <Text style={[styles.outfitName, { fontSize: compact ? 24 : 30, paddingHorizontal: compact ? 16 : 24 }, !isActive ? styles.outfitNameSecondary : null]}>{outfit.name}</Text>
 
-                <View style={styles.collageGrid}>
+                <View style={[styles.collageGrid, { height: collageHeight }]}>
                   {Array.from({ length: 4 }).map((_, i) => {
                     const uri = collageUris[i];
                     return uri ? (
@@ -218,7 +238,7 @@ export default function HomeScreen(): React.JSX.Element {
                   {!isActive ? <View style={styles.collageGrayOverlay} /> : null}
                 </View>
 
-                <View style={styles.cardBottom}>
+                <View style={[styles.cardBottom, { paddingHorizontal: compact ? 16 : 24 }]}>
                   <View style={styles.scoreRow}>
                     <View
                       style={[
@@ -226,7 +246,7 @@ export default function HomeScreen(): React.JSX.Element {
                         isActive ? styles.scoreColorPrimary : styles.scoreColorSecondary,
                       ]}
                     >
-                      <Text style={[styles.scoreText, isActive ? styles.scoreTextPrimaryDark : styles.scoreTextPrimaryDark]}>{isActive ? `COLOR ${score(outfit.colorScore)}` : `🎨 COLOR ${score(outfit.colorScore)}`}</Text>
+                      <Text style={[styles.scoreText, isActive ? styles.scoreTextPrimaryDark : styles.scoreTextColorSecondary]}>{isActive ? `COLOR ${score(outfit.colorScore)}` : `🎨 COLOR ${score(outfit.colorScore)}`}</Text>
                     </View>
                     <View
                       style={[
@@ -283,30 +303,34 @@ export default function HomeScreen(): React.JSX.Element {
           <View style={styles.box}><Text>All outfits skipped. Generating new ones...</Text></View>
         ) : null}
 
-        {!loading && !visibleOutfits.length && !outfits.length ? (
-          <View style={styles.box}><Text>Generate outfits from Occasion Planner to start.</Text></View>
+        {showGenericEmptyState ? (
+          <View style={styles.box}>
+            <Text style={styles.boxText}>Generate outfits from Occasion Planner to start.</Text>
+          </View>
         ) : null}
       </ScrollView>
 
-      <View style={styles.wearBarWrap}>
-        <Pressable
-          onPress={onWearActive}
-          disabled={!activeOutfit}
-          onPressIn={() => setWearPressed(true)}
-          onPressOut={() => setWearPressed(false)}
-        >
-          <Animated.View style={{ transform: [{ scale: wearPressed ? 0.95 : activeOutfit ? 1 : 0.98 }], opacity: activeOutfit ? 1 : 0.45 }}>
-            <LinearGradient
-              colors={['#e6c487', '#c9a96e']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.wearGradientFallback}
-            >
-              <Text style={styles.wearBtnText}>Wear This Today</Text>
-            </LinearGradient>
-          </Animated.View>
-        </Pressable>
-      </View>
+      {showWearBar ? (
+        <View style={[styles.wearBarWrap, { bottom: Math.max(90, insets.bottom + 76), paddingHorizontal: compact ? 16 : 24 }]}>
+          <Pressable
+            onPress={onWearActive}
+            disabled={!activeOutfit}
+            onPressIn={() => setWearPressed(true)}
+            onPressOut={() => setWearPressed(false)}
+          >
+            <Animated.View style={{ transform: [{ scale: wearPressed ? 0.95 : 1 }], opacity: 1 }}>
+              <LinearGradient
+                colors={['#e6c487', '#c9a96e']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.wearGradientFallback}
+              >
+                <Text style={styles.wearBtnText}>Wear This Today</Text>
+              </LinearGradient>
+            </Animated.View>
+          </Pressable>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -360,6 +384,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: '900', color: '#e5e2e1', marginBottom: 8 },
   note: { color: '#d7c5a0', marginBottom: 8 },
   box: { marginTop: 8, padding: 14, borderRadius: 12, backgroundColor: '#1f1f1f', borderWidth: 1, borderColor: '#2a2a2a' },
+  boxText: { color: '#d0c5b5', fontFamily: 'Inter_500Medium', fontSize: 14 },
   morningCard: { marginBottom: 10, padding: 12, borderRadius: 12, backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#fed7aa' },
   morningTitle: { fontWeight: '800', color: '#7c2d12' },
   morningRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
@@ -433,6 +458,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
   },
   scoreTextPrimaryDark: { color: '#261900' },
+  scoreTextColorSecondary: { color: '#5a4a22' },
   scoreTextSkinPrimary: { color: '#241a04' },
   scoreTextAiPrimary: { color: '#314163' },
   scoreTextSkinSecondary: { color: '#00201d' },

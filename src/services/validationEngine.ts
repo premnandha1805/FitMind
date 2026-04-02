@@ -20,9 +20,13 @@ export function isValidFitCheckResult(value: unknown): value is FitCheckResult {
 }
 
 export function readableError(message: string): string {
-  if (message.toLowerCase().includes('timeout')) return 'Request timed out. Please retry.';
-  if (message.toLowerCase().includes('network')) return 'No internet connection for AI validation.';
-  if (message.toLowerCase().includes('quota') || message.toLowerCase().includes('limit')) return 'Daily limit reached. Please try again tomorrow.';
+  const lower = message.toLowerCase();
+  if (lower.includes('timeout')) return 'Request timed out. Please retry.';
+  if (lower.includes('network')) return 'No internet connection for AI validation.';
+  if (lower.includes('quota exceeded') || lower.includes('limit:0') || lower.includes('free_tier')) {
+    return 'Gemini API quota for this key is exhausted. Use your own key or wait for quota reset.';
+  }
+  if (lower.includes('daily limit reached') || lower.includes('limit')) return 'Daily limit reached. Please try again tomorrow.';
   return 'Something went wrong. Please try again.';
 }
 

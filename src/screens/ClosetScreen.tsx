@@ -14,6 +14,7 @@ import {
 import { BlurView } from 'expo-blur';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useClosetStore } from '../store/useClosetStore';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -34,7 +35,7 @@ function categoryLabel(category: ClothingItemModel['category']): string {
   if (category === 'outerwear') return 'OUTERWEAR';
   if (category === 'shoes') return 'SHOES';
   if (category === 'accessory') return 'ACCESSORIES';
-  return 'OTHER';
+  return 'TOPS';
 }
 
 function ClosetSkeletonGrid({ itemWidth, gap }: { itemWidth: number; gap: number }): React.JSX.Element {
@@ -167,7 +168,12 @@ function ScrollFilter({
   const [hovered, setHovered] = useState<string | null>(null);
 
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersRow}>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={styles.filtersRow}
+    >
       {filters.map((filter) => {
         const selected = current === filter.value;
         return selected ? (
@@ -206,10 +212,12 @@ export default function ClosetScreen(): React.JSX.Element {
   const profile = useUserStore((s) => s.profile);
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const compact = width < 380;
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({});
   const [deleteTarget, setDeleteTarget] = useState<ClothingItemModel | null>(null);
-  const [menuHovered, setMenuHovered] = useState(false);
   const [fabPressed, setFabPressed] = useState(false);
+  const [emptyFabPressed, setEmptyFabPressed] = useState(false);
 
   useEffect(() => {
     loadItems();
@@ -229,44 +237,41 @@ export default function ClosetScreen(): React.JSX.Element {
     []
   );
 
-  const gap = width >= 500 ? 20 : 16;
-  const itemWidth = Math.floor((width - 48 - gap * 2) / 3);
+  const columns = width < 360 ? 2 : 3;
+  const horizontalPad = compact ? 16 : 24;
+  const gap = width >= 500 ? 20 : compact ? 10 : 16;
+  const itemWidth = Math.floor((width - horizontalPad * 2 - gap * (columns - 1)) / columns);
   const seasonLabel = monthToSeason(new Date().getMonth());
-  const headerSubtitle = `${items.length} Pieces • ${seasonLabel}`;
+  const headerSubtitle = `${items.length} Pieces â€¢ ${seasonLabel}`;
 
   return (
     <View style={styles.screen}>
-      <BlurView intensity={26} tint="dark" style={styles.headerBar}>
-        <Pressable
-          onHoverIn={() => setMenuHovered(true)}
-          onHoverOut={() => setMenuHovered(false)}
-          style={styles.headerIconBtn}
-        >
-          <Ionicons name="menu" size={24} color={menuHovered ? '#e6c487' : '#C9A96E'} />
-        </Pressable>
-        <Text style={styles.headerTitle}>Digital Atelier</Text>
-        <View style={styles.avatarWrap}>
+      <BlurView intensity={26} tint="dark" style={[styles.headerBar, { paddingTop: insets.top + 6, paddingHorizontal: horizontalPad, height: 64 + insets.top }]}>
+        <View style={styles.headerIconBtn} />
+        <Text style={[styles.headerTitle, { fontSize: compact ? 18 : 20 }]}>FitMind</Text>
+        <Pressable style={styles.avatarWrap} onPress={() => navigation.navigate('Profile')}>
           {profile?.skinImagePath ? (
             <Image source={{ uri: profile.skinImagePath }} style={styles.avatar} resizeMode="cover" />
           ) : (
             <Ionicons name="person" size={15} color="#d0c5b5" />
           )}
-        </View>
+        </Pressable>
       </BlurView>
 
       {loading ? (
-        <View style={styles.loadingWrap}>
+        <View style={[styles.loadingWrap, { paddingHorizontal: horizontalPad }]}>
           <View style={styles.pageHeader}>
-            <Text style={styles.pageTitle}>Curated Closet</Text>
+            <Text style={[styles.pageTitle, { fontSize: compact ? 30 : 36 }]}>Curated Closet</Text>
             <Text style={styles.pageSubtitle}>{headerSubtitle}</Text>
           </View>
           <ClosetSkeletonGrid itemWidth={itemWidth} gap={gap} />
         </View>
       ) : (
         <FlatList
+          key={`closet-grid-${columns}`}
           data={filtered}
           keyExtractor={(item) => item.id}
-          numColumns={3}
+          numColumns={columns}
           renderItem={({ item }) => (
             <ClosetCard
               item={item}
@@ -288,12 +293,12 @@ export default function ClosetScreen(): React.JSX.Element {
             />
           )}
           columnWrapperStyle={{ gap, marginBottom: gap }}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[styles.listContent, { paddingHorizontal: horizontalPad, paddingBottom: Math.max(180, insets.bottom + 120) }]}
           showsVerticalScrollIndicator={false}
           ListHeaderComponent={
             <>
               <View style={styles.pageHeader}>
-                <Text style={styles.pageTitle}>Curated Closet</Text>
+                <Text style={[styles.pageTitle, { fontSize: compact ? 30 : 36 }]}>Curated Closet</Text>
                 <Text style={styles.pageSubtitle}>{headerSubtitle}</Text>
               </View>
 
@@ -302,18 +307,22 @@ export default function ClosetScreen(): React.JSX.Element {
           }
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
-              <View style={styles.emptyIconWrap}>
-                <MaterialIcons name="checkroom" size={48} color="#e6c487" />
+              <View style={[styles.emptyIconWrap, { width: compact ? 80 : 96, height: compact ? 80 : 96, borderRadius: compact ? 40 : 48 }]}>
+                <MaterialIcons name="checkroom" size={compact ? 40 : 48} color="#e6c487" />
               </View>
-              <Text style={styles.emptyTitle}>Your closet is empty</Text>
-              <Text style={styles.emptyBody}>
-                Start curating your digital wardrobe by scanning your favorite pieces.
+              <Text style={[styles.emptyTitle, { fontSize: compact ? 20 : 24 }]}>
+                {items.length > 0 ? 'No items in this category' : 'Your closet is empty'}
               </Text>
-              <Animated.View style={{ transform: [{ scale: fabPressed ? 0.95 : 1 }] }}>
+              <Text style={[styles.emptyBody, { maxWidth: compact ? 250 : 280 }]}>
+                {items.length > 0
+                  ? 'Try selecting a different category filter above.'
+                  : 'Start curating your digital wardrobe by scanning your favorite pieces.'}
+              </Text>
+              <Animated.View style={{ transform: [{ scale: emptyFabPressed ? 0.95 : 1 }] }}>
                 <Pressable
                   onPress={() => navigation.navigate('AddItem')}
-                  onPressIn={() => setFabPressed(true)}
-                  onPressOut={() => setFabPressed(false)}
+                  onPressIn={() => setEmptyFabPressed(true)}
+                  onPressOut={() => setEmptyFabPressed(false)}
                 >
                   <LinearGradient
                     colors={['#e6c487', '#c9a96e']}
@@ -332,7 +341,7 @@ export default function ClosetScreen(): React.JSX.Element {
 
       <Modal transparent visible={Boolean(deleteTarget)} animationType="slide" onRequestClose={() => setDeleteTarget(null)}>
         <Pressable style={styles.sheetBackdrop} onPress={() => setDeleteTarget(null)}>
-          <Pressable style={styles.sheet} onPress={() => {}}>
+          <Pressable style={styles.sheet} onPress={() => { }}>
             <Text style={styles.sheetTitle}>Remove this item from your closet?</Text>
             <Pressable
               onPress={() => {
@@ -359,22 +368,33 @@ export default function ClosetScreen(): React.JSX.Element {
         </Pressable>
       </Modal>
 
-      <Animated.View style={[styles.fabWrap, { transform: [{ scale: fabPressed ? 0.9 : 1 }] }]}>
-        <Pressable
-          onPress={() => navigation.navigate('AddItem')}
-          onPressIn={() => setFabPressed(true)}
-          onPressOut={() => setFabPressed(false)}
+      {items.length > 0 ? (
+        <Animated.View
+          style={[
+            styles.fabWrap,
+            {
+              right: horizontalPad,
+              bottom: Math.max(insets.bottom + 72, 96),
+              transform: [{ scale: fabPressed ? 0.9 : 1 }],
+            },
+          ]}
         >
-          <LinearGradient
-            colors={['#e6c487', '#c9a96e']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.fab}
+          <Pressable
+            onPress={() => navigation.navigate('AddItem')}
+            onPressIn={() => setFabPressed(true)}
+            onPressOut={() => setFabPressed(false)}
           >
-            <Text style={styles.fabText}>+</Text>
-          </LinearGradient>
-        </Pressable>
-      </Animated.View>
+            <LinearGradient
+              colors={['#e6c487', '#c9a96e']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[styles.fab, { width: compact ? 56 : 64, height: compact ? 56 : 64, borderRadius: compact ? 28 : 32 }]}
+            >
+              <Text style={[styles.fabText, { fontSize: compact ? 30 : 34 }]}>+</Text>
+            </LinearGradient>
+          </Pressable>
+        </Animated.View>
+      ) : null}
     </View>
   );
 }
@@ -423,8 +443,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
   pageHeader: {
-    marginTop: 96,
-    marginBottom: 40,
+    marginTop: 24,
+    marginBottom: 24,
   },
   pageTitle: {
     color: '#e5e2e1',
@@ -547,7 +567,8 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   emptyWrap: {
-    paddingVertical: 80,
+    minHeight: 360,
+    paddingVertical: 40,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 24,

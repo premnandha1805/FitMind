@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { Platform } from 'react-native';
 import { executeSqlWithRetry, getOne } from '../db/queries';
 import { ExplicitPreferences, UserProfile } from '../types/models';
 import { safeAsync } from '../utils/safeAsync';
@@ -27,6 +28,11 @@ export const useUserStore = create<UserState>((set) => ({
   loading: false,
 
   loadUser: async () => {
+    if (Platform.OS === 'web') {
+      set({ profile: null, preferences: defaultPrefs, loading: false });
+      return;
+    }
+
     set({ loading: true });
     await safeAsync(async () => {
       const row = await getOne<{
@@ -77,6 +83,20 @@ export const useUserStore = create<UserState>((set) => ({
   },
 
   saveProfile: async (profile) => {
+    if (Platform.OS === 'web') {
+      set({
+        profile: {
+          id: 'user',
+          skinToneId: profile.skinToneId,
+          skinUndertone: profile.skinUndertone,
+          skinImagePath: profile.skinImagePath,
+          onboarded: profile.onboarded,
+          createdAt: new Date().toISOString(),
+        },
+      });
+      return;
+    }
+
     await safeAsync(async () => {
       await executeSqlWithRetry(
         `INSERT OR REPLACE INTO user_profile
@@ -98,6 +118,11 @@ export const useUserStore = create<UserState>((set) => ({
   },
 
   savePreferences: async (prefs) => {
+    if (Platform.OS === 'web') {
+      set({ preferences: prefs });
+      return;
+    }
+
     await safeAsync(async () => {
       await executeSqlWithRetry(
         `UPDATE explicit_preferences

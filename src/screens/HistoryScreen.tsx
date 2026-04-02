@@ -11,11 +11,15 @@ import {
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useOutfitStore } from '../store/useOutfitStore';
 import { useClosetStore } from '../store/useClosetStore';
+import { useResponsive } from '../utils/responsive';
 
 const FILTERS = ['All', 'Loved', 'Worn', 'Recent'] as const;
 type FilterType = (typeof FILTERS)[number];
+
+const DEFAULT_OCCASION = 'Modern Minimalist';
 
 function formatDate(iso: string): string {
   const date = new Date(iso);
@@ -31,6 +35,8 @@ function titleCase(value: string): string {
 }
 
 export default function HistoryScreen(): React.JSX.Element {
+  const insets = useSafeAreaInsets();
+  const { rs } = useResponsive();
   const outfits = useOutfitStore((s) => s.outfits);
   const closetItems = useClosetStore((s) => s.items);
 
@@ -42,12 +48,12 @@ export default function HistoryScreen(): React.JSX.Element {
     const likedFits = outfits.filter((outfit) => outfit.liked > 0).length;
 
     const occasionCount = outfits.reduce<Record<string, number>>((acc, outfit) => {
-      const key = outfit.occasion || 'casual';
+      const key = outfit.occasion || DEFAULT_OCCASION;
       acc[key] = (acc[key] ?? 0) + 1;
       return acc;
     }, {});
 
-    const topCategory = Object.entries(occasionCount).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'Tailored';
+    const topCategory = Object.entries(occasionCount).sort((a, b) => b[1] - a[1])[0]?.[0] ?? DEFAULT_OCCASION;
 
     return {
       looksWorn,
@@ -68,8 +74,9 @@ export default function HistoryScreen(): React.JSX.Element {
     if (search.trim()) {
       const query = search.trim().toLowerCase();
       filtered = filtered.filter((outfit) => {
-        const occasion = outfit.occasion.toLowerCase();
-        const title = titleCase(outfit.occasion).toLowerCase();
+        const rawOcc = outfit.occasion || DEFAULT_OCCASION;
+        const occasion = rawOcc.toLowerCase();
+        const title = titleCase(rawOcc).toLowerCase();
         return occasion.includes(query) || title.includes(query);
       });
     }
@@ -77,25 +84,46 @@ export default function HistoryScreen(): React.JSX.Element {
     return filtered;
   }, [activeFilter, outfits, search]);
 
+  const headerHeight = Math.max(64, insets.top + rs(54, 50, 64));
+
   return (
     <View style={styles.screen}>
-      <BlurView intensity={20} tint="dark" style={styles.header}>
+      <BlurView
+        intensity={20}
+        tint="dark"
+        style={[
+          styles.header,
+          {
+            height: headerHeight,
+            paddingTop: insets.top,
+            paddingHorizontal: rs(24, 14, 28),
+          },
+        ]}
+      >
         <View style={styles.headerLeft}>
           <View style={styles.headerIconCircle}>
             <MaterialIcons name="history" size={22} color="#e6c487" />
           </View>
           <Text style={styles.headerTitle}>Style History</Text>
         </View>
-
-        <Pressable style={styles.headerRightBtn}>
-          <MaterialIcons name="tune" size={20} color="#e5e2e1" />
-        </Pressable>
       </BlurView>
 
-      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.container,
+          {
+            paddingTop: headerHeight + rs(20, 16, 28),
+            paddingHorizontal: rs(24, 14, 28),
+            paddingBottom: Math.max(120, insets.bottom + rs(90, 78, 124)),
+          },
+        ]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
+          showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.summaryRow}
         >
           <View style={[styles.summaryCard, styles.summaryCardPrimary]}>
@@ -126,7 +154,12 @@ export default function HistoryScreen(): React.JSX.Element {
             />
           </View>
 
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.filterRow}
+          >
             {FILTERS.map((filter) => {
               const selected = activeFilter === filter;
               return (
@@ -152,7 +185,7 @@ export default function HistoryScreen(): React.JSX.Element {
         </View>
 
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Recent Activity</Text>
+          <Text style={[styles.sectionTitle, { fontSize: rs(28, 22, 30) }]}>Recent Activity</Text>
           <View style={styles.sectionLine} />
         </View>
 
@@ -165,27 +198,37 @@ export default function HistoryScreen(): React.JSX.Element {
         ) : (
           visibleOutfits.map((outfit, index) => {
             const previewIds = outfit.itemIds.slice(0, 4);
-            const images = previewIds.map((id) => closetItems.find((item) => item.id === id)?.imagePath).filter(Boolean) as string[];
-            const remaining = Math.max(0, outfit.itemIds.length - images.length);
+            const images = previewIds.map((id) => {
+              const uri = closetItems.find((item) => item.id === id)?.imagePath;
+              return uri ? { id, uri } : null;
+            }).filter(Boolean) as { id: string, uri: string }[];
+            const remaining = Math.max(0, outfit.itemIds.length - previewIds.length);
+            const displayOccasion = outfit.occasion || DEFAULT_OCCASION;
+            const displayScore = outfit.finalScore ?? 0;
 
             return (
               <View key={outfit.id} style={[styles.activityCard, index === visibleOutfits.length - 1 ? styles.lastActivityCard : null]}>
                 <View style={styles.activityHeader}>
                   <View>
                     <Text style={styles.activityDate}>{formatDate(outfit.createdAt)}</Text>
-                    <Text style={styles.activityTitle}>{titleCase(outfit.occasion || 'Modern Minimalist')}</Text>
+                    <Text style={styles.activityTitle}>{titleCase(displayOccasion)}</Text>
                   </View>
 
                   <View style={styles.activityRight}>
-                    <View style={styles.tag}><Text style={styles.tagText}>{titleCase(outfit.occasion || 'Work')}</Text></View>
-                    <View style={styles.scoreTag}><Text style={styles.scoreText}>{outfit.finalScore.toFixed(1)}/10</Text></View>
+                    <View style={styles.tag}><Text style={styles.tagText}>{titleCase(displayOccasion)}</Text></View>
+                    <View style={styles.scoreTag}><Text style={styles.scoreText}>{displayScore.toFixed(1)}/10</Text></View>
                   </View>
                 </View>
 
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.thumbRow}>
-                  {images.map((uri) => (
-                    <View key={uri} style={styles.thumbWrap}>
-                      <Image source={{ uri }} style={styles.thumbImage} resizeMode="cover" />
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={styles.thumbRow}
+                >
+                  {images.map((image) => (
+                    <View key={image.id} style={styles.thumbWrap}>
+                      <Image source={{ uri: image.uri }} style={styles.thumbImage} resizeMode="cover" />
                     </View>
                   ))}
                   {remaining > 0 ? (
@@ -195,14 +238,6 @@ export default function HistoryScreen(): React.JSX.Element {
                   ) : null}
                 </ScrollView>
 
-                <View style={styles.actionRow}>
-                  <Pressable style={styles.actionBtn}>
-                    <MaterialIcons name="psychology" size={20} color="#d0c5b5" />
-                  </Pressable>
-                  <Pressable style={styles.actionBtn}>
-                    <MaterialIcons name="refresh" size={20} color="#d0c5b5" />
-                  </Pressable>
-                </View>
               </View>
             );
           })
@@ -225,8 +260,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 20,
-    height: 64,
-    paddingHorizontal: 24,
     backgroundColor: 'rgba(10,10,10,0.60)',
     flexDirection: 'row',
     alignItems: 'center',
@@ -250,14 +283,6 @@ const styles = StyleSheet.create({
     fontFamily: 'NotoSerif_700Bold',
     fontSize: 22,
   },
-  headerRightBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#2a2a2a',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   container: {
     paddingTop: 84,
     paddingHorizontal: 24,
@@ -270,7 +295,7 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   summaryCard: {
-    minWidth: 140,
+    minWidth: 128,
     flex: 1,
     backgroundColor: '#1c1b1b',
     borderRadius: 16,
@@ -375,6 +400,8 @@ const styles = StyleSheet.create({
   activityHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 8,
     marginBottom: 14,
   },
   activityDate: {
@@ -442,22 +469,6 @@ const styles = StyleSheet.create({
     color: '#d0c5b5',
     fontFamily: 'Inter_500Medium',
     fontSize: 12,
-  },
-  actionRow: {
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(153,143,129,0.05)',
-    paddingTop: 12,
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 10,
-  },
-  actionBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#353534',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   emptyCard: {
     borderRadius: 16,

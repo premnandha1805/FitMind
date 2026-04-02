@@ -4,26 +4,39 @@ import {
   applyColorRules,
   applySkinToneFilter,
   applyTasteFilter,
+  generateOutfitExplanation,
   generateOutfitName,
 } from './outfitEngine';
 import { scoreCandidateAgainstTaste } from './tasteEngine';
 import { AVOID_COLORS_MAP, CONFIDENCE_TIPS } from '../constants/scenarioRules';
 import { ClothingItem, Outfit, OutfitCandidate, TasteProfile, UserProfile } from '../types/models';
 
-const SCENARIO_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+const SCENARIO_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+const SCENARIO_MODEL_CANDIDATES = [
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-1.5-flash-latest',
+  'gemini-1.5-flash-8b',
+  'gemini-1.5-flash',
+] as const;
 
 export interface ScenarioContext {
   event_type: string;
+  industry_context: 'tech' | 'finance' | 'creative' | 'academic' | 'general';
   formality: number;
   setting: 'indoor' | 'outdoor' | 'video_call' | 'mixed';
   culture_context: 'general' | 'ethnic' | 'western' | 'mixed';
   weather_relevant: boolean;
   upper_body_only: boolean;
+  time_of_day: 'morning' | 'afternoon' | 'evening' | 'night';
   avoid_colors: string[];
   priority_attributes: string[];
   occasion_category: 'casual' | 'formal' | 'party' | 'ethnic' | 'professional';
+  power_level: 'authoritative' | 'approachable' | 'creative' | 'traditional';
   confidence_tip: string;
+  dress_code: 'smart casual' | 'business casual' | 'business formal' | 'black tie' | 'ethnic formal' | 'creative';
   missing_item_suggestions: string[];
+  styling_notes: string;
 }
 
 export interface ScenarioOutfitResult {
@@ -37,27 +50,68 @@ export interface AdvisorResponse {
   outfit: Outfit | null;
   explanation: string[];
   confidenceTip: string;
+  dresscode?: string;
+  stylingNotes?: string;
   missingItems: string[];
   videoCallMode: boolean;
   formality: number;
   eventType: string;
+  powerLevel?: string;
   allScores: { color: number; skin: number; taste: number; gemini: number; overall: number } | null;
   closestOutfit: Outfit | null;
   closestExplanation: string[];
 }
 
+const INDUSTRY_RULES = {
+  tech: {
+    formal: 'Smart casual - avoid full suits unless C-suite',
+    casual: 'Clean minimal - well-fitted basics over logos',
+    colors: ['navy', 'grey', 'white', 'minimal patterns'],
+    avoid: ['loud prints', 'excessive jewelry', 'wrinkled clothes'],
+  },
+  finance: {
+    formal: 'Conservative business - navy/charcoal/grey preferred',
+    casual: 'Business casual - blazer always safe',
+    colors: ['navy', 'charcoal', 'white', 'light blue', 'burgundy'],
+    avoid: ['bright colors', 'casual shoes', 'unbuttoned collars'],
+  },
+  creative: {
+    formal: 'Creative professional - personality pieces welcome',
+    casual: 'Express personality - bold colors ok',
+    colors: ['any palette', 'statement pieces welcome'],
+    avoid: ['boring generic outfits'],
+  },
+  academic: {
+    formal: 'Polished but practical - smart layers work best',
+    casual: 'Quietly confident and functional',
+    colors: ['navy', 'olive', 'cream', 'earth tones'],
+    avoid: ['overly flashy accents'],
+  },
+  general: {
+    formal: 'Clean and event-appropriate',
+    casual: 'Balanced and context-aware',
+    colors: ['balanced palette'],
+    avoid: ['extreme mismatch'],
+  },
+} as const;
+
 const FALLBACK_CONTEXT: ScenarioContext = {
   event_type: 'general event',
+  industry_context: 'general',
   formality: 5,
   setting: 'indoor',
   culture_context: 'general',
   weather_relevant: false,
   upper_body_only: false,
+  time_of_day: 'evening',
   avoid_colors: [],
   priority_attributes: [],
   occasion_category: 'casual',
+  power_level: 'approachable',
   confidence_tip: '',
+  dress_code: 'smart casual',
   missing_item_suggestions: [],
+  styling_notes: 'Keep proportions clean and colors cohesive for this setting.',
 };
 
 interface ExtractResult {
@@ -81,6 +135,10 @@ function normalizeContext(raw: unknown): ScenarioContext {
     ? obj.setting
     : 'indoor';
 
+  const industry = obj.industry_context === 'tech' || obj.industry_context === 'finance' || obj.industry_context === 'creative' || obj.industry_context === 'academic' || obj.industry_context === 'general'
+    ? obj.industry_context
+    : 'general';
+
   const culture = obj.culture_context === 'general' || obj.culture_context === 'ethnic' || obj.culture_context === 'western' || obj.culture_context === 'mixed'
     ? obj.culture_context
     : 'general';
@@ -88,6 +146,18 @@ function normalizeContext(raw: unknown): ScenarioContext {
   const occasion = obj.occasion_category === 'casual' || obj.occasion_category === 'formal' || obj.occasion_category === 'party' || obj.occasion_category === 'ethnic' || obj.occasion_category === 'professional'
     ? obj.occasion_category
     : 'casual';
+
+  const timeOfDay = obj.time_of_day === 'morning' || obj.time_of_day === 'afternoon' || obj.time_of_day === 'evening' || obj.time_of_day === 'night'
+    ? obj.time_of_day
+    : 'evening';
+
+  const powerLevel = obj.power_level === 'authoritative' || obj.power_level === 'approachable' || obj.power_level === 'creative' || obj.power_level === 'traditional'
+    ? obj.power_level
+    : 'approachable';
+
+  const dressCode = obj.dress_code === 'smart casual' || obj.dress_code === 'business casual' || obj.dress_code === 'business formal' || obj.dress_code === 'black tie' || obj.dress_code === 'ethnic formal' || obj.dress_code === 'creative'
+    ? obj.dress_code
+    : 'smart casual';
 
   const avoid = Array.isArray(obj.avoid_colors)
     ? obj.avoid_colors.filter((x): x is string => typeof x === 'string').map((x) => x.toLowerCase())
@@ -107,20 +177,64 @@ function normalizeContext(raw: unknown): ScenarioContext {
     ? obj.confidence_tip.trim()
     : (CONFIDENCE_TIPS[eventKey] ?? CONFIDENCE_TIPS.default);
 
+  const stylingNotes = typeof obj.styling_notes === 'string' && obj.styling_notes.trim()
+    ? obj.styling_notes.trim()
+    : 'Balance structure and polish to match the context while staying authentic to your style.';
+
   return {
     event_type: eventType,
+    industry_context: industry,
     formality: clampFormality(obj.formality),
     setting,
     culture_context: culture,
     weather_relevant: Boolean(obj.weather_relevant),
     upper_body_only: Boolean(obj.upper_body_only) || setting === 'video_call',
+    time_of_day: timeOfDay,
     avoid_colors: Array.from(new Set([...avoid, ...mappedAvoid])),
     priority_attributes: priority,
     occasion_category: occasion,
+    power_level: powerLevel,
     confidence_tip: tip,
+    dress_code: dressCode,
     missing_item_suggestions: missing,
+    styling_notes: stylingNotes,
   };
 }
+
+const buildScenarioPrompt = (userMessage: string,
+  toneName: string, undertone: string,
+  styleIdentity: string, topColors: string[]): string => `
+You are an expert personal stylist AI with knowledge of:
+- Corporate dress codes across industries
+- Cultural occasion requirements
+- Event-specific styling rules
+- Color psychology for different settings
+- Body language and confidence dressing
+
+User situation: "${userMessage}"
+Their skin tone: ${toneName} with ${undertone} undertone
+Their style: ${styleIdentity}
+Colors they love: ${topColors.join(', ')}
+
+Extract precise styling context. Respond ONLY with valid JSON:
+{
+  "event_type": "<specific event name>",
+  "industry_context": "<tech|finance|creative|academic|general>",
+  "formality": <1-10>,
+  "setting": "<indoor|outdoor|video_call|mixed>",
+  "culture_context": "<general|ethnic|western|mixed>",
+  "weather_relevant": <boolean>,
+  "upper_body_only": <boolean>,
+  "time_of_day": "<morning|afternoon|evening|night>",
+  "avoid_colors": ["<color to avoid and why>"],
+  "priority_attributes": ["<most important style attribute>"],
+  "occasion_category": "<casual|formal|party|ethnic|professional>",
+  "power_level": "<authoritative|approachable|creative|traditional>",
+  "confidence_tip": "<one highly specific tip for THIS exact situation>",
+  "dress_code": "<smart casual|business casual|business formal|black tie|ethnic formal|creative>",
+  "missing_item_suggestions": ["<item that would elevate this look>"],
+  "styling_notes": "<2 sentence expert note about this specific occasion>"
+}`;
 
 async function callGeminiPrompt(prompt: string): Promise<{ text: string; status: number }> {
   const key = await getGeminiKey();
@@ -128,52 +242,56 @@ async function callGeminiPrompt(prompt: string): Promise<{ text: string; status:
     throw new Error('Gemini API key is not configured.');
   }
 
-  const controller = new AbortController();
-  const timeoutHandle = setTimeout(() => controller.abort(), 12000);
-  const response = await fetch(`${SCENARIO_API_URL}?key=${key}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal: controller.signal,
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-    }),
-  });
-  clearTimeout(timeoutHandle);
+  let lastStatus = 500;
+  let lastText = '';
 
-  const json = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-  return { text: json.candidates?.[0]?.content?.parts?.[0]?.text ?? '', status: response.status };
+  for (const model of SCENARIO_MODEL_CANDIDATES) {
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), 12000);
+
+    const response = await fetch(`${SCENARIO_API_BASE}/${model}:generateContent?key=${key}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+      }),
+    });
+    clearTimeout(timeoutHandle);
+
+    const json = await response.json() as {
+      error?: { message?: string };
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+
+    const message = json.error?.message?.toLowerCase() ?? '';
+    const unsupported = response.status === 404 || message.includes('not supported for generatecontent') || message.includes('not found for api version');
+    if (unsupported) {
+      continue;
+    }
+
+    lastStatus = response.status;
+    lastText = json.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    return { text: lastText, status: lastStatus };
+  }
+
+  return { text: lastText, status: lastStatus };
 }
 
 export async function extractScenarioContext(
   userMessage: string,
   skinToneId: number,
-  undertone: string
+  undertone: string,
+  styleIdentity = 'classic',
+  topColors: string[] = []
 ): Promise<ExtractResult> {
   const network = await NetInfo.fetch();
   if (!network.isConnected) {
     throw new Error('NO_INTERNET');
   }
 
-  void skinToneId;
-  void undertone;
-
-  const prompt = `You are a professional fashion stylist assistant.
-The user described this situation: '[${userMessage}]'
-Extract styling context and respond ONLY with valid JSON:
-{
-  event_type: string,
-  formality: number (1-10, 1=beach casual 10=black tie),
-  setting: 'indoor'|'outdoor'|'video_call'|'mixed',
-  culture_context: 'general'|'ethnic'|'western'|'mixed',
-  weather_relevant: boolean,
-  upper_body_only: boolean,
-  avoid_colors: string[],
-  priority_attributes: string[],
-  occasion_category: 'casual'|'formal'|'party'|'ethnic'|'professional',
-  confidence_tip: string (one sentence relevant to this exact situation),
-  missing_item_suggestions: string[] (items that would elevate this look
-    but may not be in closet - max 2)
-}`;
+  const toneName = `Tone ${skinToneId}`;
+  const prompt = buildScenarioPrompt(userMessage, toneName, undertone, styleIdentity, topColors);
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const response = await callGeminiPrompt(prompt);
@@ -322,7 +440,7 @@ function tuneTasteForFormality(context: ScenarioContext, taste: TasteProfile): T
 function buildOutfitFromCandidate(candidate: OutfitCandidate, context: ScenarioContext): Outfit {
   return {
     id: `advisor-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    name: generateOutfitName(context.occasion_category, candidate.layer1Score, candidate.layer2Score),
+    name: generateOutfitName(candidate, context.occasion_category, candidate.finalScore),
     occasion: context.occasion_category,
     itemIds: [candidate.top.id, candidate.bottom.id, candidate.shoes?.id, candidate.accessory?.id, candidate.outerwear?.id]
       .filter((x): x is string => Boolean(x)),
@@ -344,6 +462,112 @@ function applyVideoCallCandidate(candidate: OutfitCandidate): OutfitCandidate {
     bottom: candidate.bottom,
     shoes: null,
     outerwear: null,
+  };
+}
+
+function candidateItems(candidate: OutfitCandidate): ClothingItem[] {
+  return [candidate.top, candidate.bottom, candidate.shoes, candidate.accessory, candidate.outerwear]
+    .filter((x): x is ClothingItem => Boolean(x));
+}
+
+function getScenarioNote(context: ScenarioContext): string {
+  const notes: Record<string, string> = {
+    tech_interview: 'Smart casual signals cultural fit at tech companies',
+    finance_interview: 'Conservative dress builds instant credibility',
+    first_date: 'Put-together but not overdressed shows confidence',
+    wedding_guest: 'Elegant but never competing with the wedding party',
+    presentation: 'Solid colors keep attention focused on your words',
+    video_call: 'Camera-friendly colors create professional presence',
+  };
+
+  const eventKey = context.event_type.toLowerCase().replace(/\s+/g, '_');
+  const key = `${context.industry_context}_${eventKey}`;
+  return notes[key] || notes[eventKey] || context.styling_notes;
+}
+
+function getPowerNote(powerLevel: ScenarioContext['power_level'], items: ClothingItem[]): string {
+  const hasStructured = items.some((i) => ['formal', 'professional', 'classic', 'tailored'].includes(i.styleType.toLowerCase()));
+  if (powerLevel === 'authoritative') {
+    return hasStructured
+      ? 'Structured lines reinforce an authoritative presence.'
+      : 'Add one structured piece to project stronger authority.';
+  }
+  if (powerLevel === 'creative') return 'A personality accent keeps this expressive without losing polish.';
+  if (powerLevel === 'traditional') return 'Classic proportions keep the look respectful and dependable.';
+  return 'Approachable styling keeps you open and confident in conversation.';
+}
+
+function getCultureNote(culture: ScenarioContext['culture_context']): string | null {
+  if (culture === 'ethnic') return 'Cultural context respected with event-appropriate polish.';
+  if (culture === 'mixed') return 'Balanced styling bridges multiple cultural expectations well.';
+  return null;
+}
+
+function detectMissingItems(context: ScenarioContext, closet: ClothingItem[], outfit: OutfitCandidate): string[] {
+  const needed: string[] = [];
+  const items = candidateItems(outfit);
+
+  if (context.formality >= 7) {
+    const hasBlazerInOutfit = items.some((i) => i.category === 'outerwear' || i.styleType.toLowerCase().includes('blazer'));
+    if (!hasBlazerInOutfit) {
+      const hasAnyBlazer = closet.some((i) => i.styleType.toLowerCase().includes('blazer') || i.styleType.toLowerCase().includes('jacket') || i.category === 'outerwear');
+      if (!hasAnyBlazer) {
+        needed.push('A structured blazer would elevate this look significantly');
+      }
+    }
+  }
+
+  if (context.setting === 'outdoor' && context.weather_relevant) {
+    const hasOuterwear = items.some((i) => i.category === 'outerwear');
+    if (!hasOuterwear && !closet.some((i) => i.category === 'outerwear')) {
+      needed.push('A light jacket suitable for outdoor wear');
+    }
+  }
+
+  return needed;
+}
+
+function buildOutfitExplanationForScenario(
+  outfit: OutfitCandidate,
+  context: ScenarioContext,
+  toneId: number,
+  undertone: string,
+  closetItems: ClothingItem[]
+): AdvisorResponse {
+  const baseExplanations = generateOutfitExplanation(outfit, toneId, undertone, context.occasion_category);
+  const items = candidateItems(outfit);
+  const scenarioNote = getScenarioNote(context);
+  const powerNote = getPowerNote(context.power_level, items);
+  const cultureNote = getCultureNote(context.culture_context);
+  const industry = INDUSTRY_RULES[context.industry_context];
+  const industryRuleNote = context.formality >= 7 ? industry.formal : industry.casual;
+  const missingItems = [
+    ...detectMissingItems(context, closetItems, outfit),
+    ...context.missing_item_suggestions,
+  ];
+
+  return {
+    outfit: buildOutfitFromCandidate(outfit, context),
+    explanation: [...baseExplanations, scenarioNote, powerNote, cultureNote, industryRuleNote]
+      .filter((x): x is string => Boolean(x))
+      .slice(0, 5),
+    confidenceTip: context.confidence_tip,
+    dresscode: context.dress_code,
+    stylingNotes: context.styling_notes,
+    missingItems: Array.from(new Set(missingItems)),
+    videoCallMode: context.upper_body_only,
+    formality: context.formality,
+    eventType: context.event_type,
+    powerLevel: context.power_level,
+    allScores: {
+      color: outfit.layer1Score,
+      skin: outfit.layer2Score,
+      taste: outfit.layer3Score,
+      gemini: outfit.geminiScore,
+      overall: outfit.finalScore,
+    },
+    closestOutfit: null,
+    closestExplanation: [],
   };
 }
 
@@ -455,23 +679,20 @@ export function buildAdvisorResponse(
   closetItems: ClothingItem[]
 ): AdvisorResponse {
   const candidate = result.candidate;
-  const explanation: string[] = [];
 
   if (candidate) {
-    const items = [candidate.top, candidate.bottom, candidate.shoes, candidate.accessory, candidate.outerwear]
-      .filter((x): x is ClothingItem => Boolean(x));
-
-    items.forEach((item) => {
-      if (context.upper_body_only && item.category !== 'top' && item.category !== 'accessory') return;
-      const itemLabel = `${item.category[0].toUpperCase()}${item.category.slice(1)}`;
-      explanation.push(`${itemLabel} - ${reasonForItem(item, context)}`);
-    });
+    return buildOutfitExplanationForScenario(candidate, context, 3, 'Neutral', closetItems);
   }
 
   const missingItems = context.missing_item_suggestions
     .filter((item) => !hasMatchingItemInCloset(item, closetItems));
 
   const confidenceTip = context.confidence_tip || CONFIDENCE_TIPS.default;
+  const explanation: string[] = [
+    getScenarioNote(context),
+    context.styling_notes,
+    context.formality >= 7 ? INDUSTRY_RULES[context.industry_context].formal : INDUSTRY_RULES[context.industry_context].casual,
+  ].filter((x): x is string => Boolean(x));
 
   const closestExplanation = result.closestCandidate
     ? [
@@ -489,19 +710,14 @@ export function buildAdvisorResponse(
     outfit: result.outfit,
     explanation,
     confidenceTip,
+    dresscode: context.dress_code,
+    stylingNotes: context.styling_notes,
     missingItems,
     videoCallMode: context.upper_body_only,
     formality: context.formality,
     eventType: context.event_type,
-    allScores: candidate
-      ? {
-        color: candidate.layer1Score,
-        skin: candidate.layer2Score,
-        taste: candidate.layer3Score,
-        gemini: candidate.geminiScore,
-        overall: candidate.finalScore,
-      }
-      : null,
+    powerLevel: context.power_level,
+    allScores: null,
     closestOutfit: result.closestOutfit,
     closestExplanation,
   };

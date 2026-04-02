@@ -12,21 +12,20 @@ import {
 import { StackScreenProps } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFonts as useInterFonts, Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
-import {
-  useFonts as usePlayfairFonts,
-  PlayfairDisplay_700Bold_Italic,
-} from '@expo-google-fonts/playfair-display';
-import { useFonts as useNotoSerifFonts, NotoSerif_400Regular_Italic } from '@expo-google-fonts/noto-serif';
+import { useFonts as useNotoSerifFonts, NotoSerif_400Regular_Italic, NotoSerif_700Bold_Italic } from '@expo-google-fonts/noto-serif';
 import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { RootStackParamList } from '../navigation/types';
+import { useResponsive } from '../utils/responsive';
 
 type Props = StackScreenProps<RootStackParamList, 'Onboarding'>;
 
 export default function OnboardingScreen({ navigation }: Props): React.JSX.Element {
-  const [interLoaded] = useInterFonts({ Inter_400Regular, Inter_600SemiBold });
-  const [playfairLoaded] = usePlayfairFonts({ PlayfairDisplay_700Bold_Italic });
-  const [notoLoaded] = useNotoSerifFonts({ NotoSerif_400Regular_Italic });
+  const insets = useSafeAreaInsets();
+  const { compact, rs } = useResponsive();
+  const [interLoaded, interError] = useInterFonts({ Inter_400Regular, Inter_600SemiBold });
+  const [notoLoaded, notoError] = useNotoSerifFonts({ NotoSerif_400Regular_Italic, NotoSerif_700Bold_Italic });
   const ctaScale = useRef(new Animated.Value(1)).current;
   const webSilhouetteStyle: ImageStyle | undefined = Platform.OS === 'web'
     ? ({ filter: 'grayscale(100%)', mixBlendMode: 'luminosity' } as unknown as ImageStyle)
@@ -40,7 +39,11 @@ export default function OnboardingScreen({ navigation }: Props): React.JSX.Eleme
     }).start();
   };
 
-  if (!interLoaded || !playfairLoaded || !notoLoaded) {
+  if (interError || notoError) {
+    console.error('[OnboardingScreen] Font loading failed:', interError || notoError);
+  }
+
+  if (!interLoaded || !notoLoaded) {
     return <View style={styles.loadingFill} />;
   }
 
@@ -63,22 +66,33 @@ export default function OnboardingScreen({ navigation }: Props): React.JSX.Eleme
         style={[styles.silhouette, webSilhouetteStyle]}
       />
 
-      <View style={styles.content}>
+      <View
+        style={[
+          styles.content,
+          {
+            paddingHorizontal: rs(24, 14, 28),
+            paddingTop: Math.max(insets.top + rs(26, 20, 32), 56),
+            paddingBottom: Math.max(insets.bottom + rs(20, 14, 24), 32),
+          },
+        ]}
+      >
         <View style={styles.topSection}>
-          <Text style={styles.brand}>FitMind</Text>
-          <Text style={styles.tagline}>Your AI stylist. Your wardrobe. Your rules.</Text>
+          <Text style={[styles.brand, { fontSize: rs(72, 46, 76) }]}>FitMind</Text>
+          <Text style={[styles.tagline, { fontSize: rs(18, 14, 20) }]}>Your AI stylist. Your wardrobe. Your rules.</Text>
         </View>
 
         <View style={styles.middleSection}>
           <View style={styles.valuePill}>
             <Ionicons name="sparkles" size={12} color="#e6c487" />
-            <Text style={styles.pillText}>PERSONALIZED DIGITAL ATELIER</Text>
+            <Text style={styles.pillText}>ELEVATED BY INTELLIGENCE</Text>
           </View>
         </View>
 
         <View style={styles.bottomSection}>
           <Animated.View style={[styles.ctaWrap, { transform: [{ scale: ctaScale }] }]}>
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Get started"
               onPressIn={() => animateCta(0.98)}
               onPressOut={() => animateCta(1)}
               onPress={() => navigation.navigate('SkinTone')}
@@ -93,7 +107,7 @@ export default function OnboardingScreen({ navigation }: Props): React.JSX.Eleme
               </LinearGradient>
             </Pressable>
           </Animated.View>
-          <Text style={styles.footer}>The Digital Atelier © 2024</Text>
+          <Text style={[styles.footer, compact ? styles.footerCompact : null]}>The Digital Atelier © {new Date().getFullYear()}</Text>
         </View>
       </View>
     </View>
@@ -133,7 +147,7 @@ const styles = StyleSheet.create({
   brand: {
     fontSize: 72,
     color: '#e6c487',
-    fontFamily: 'PlayfairDisplay_700Bold_Italic',
+    fontFamily: 'NotoSerif_700Bold_Italic',
     textShadowColor: 'rgba(230,196,135,0.3)',
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 20,
@@ -197,5 +211,9 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 2,
     fontFamily: 'Inter_400Regular',
+  },
+  footerCompact: {
+    textAlign: 'center',
+    letterSpacing: 1.2,
   },
 });

@@ -15,13 +15,16 @@ import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import { NavigationProp, useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUserStore } from '../store/useUserStore';
 import { executeSqlWithRetry, getAll, getOne } from '../db/queries';
 import { detectTasteInsights, getLearningProgress, recalculateTasteWeights } from '../services/feedbackEngine';
 import { getTasteProfile } from '../services/tasteEngine';
+import { getCacheHitRate, requestLog } from '../services/requestManager';
 import { safeAsync } from '../utils/safeAsync';
 import { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { TasteInsight, TasteProfile } from '../types/models';
+import { useResponsive } from '../utils/responsive';
 
 const palette = ['#1b2a49', '#7a1f3d', '#0f8b5f', '#ff7f50', '#d4a017', '#008080', '#000000', '#ffffff'];
 const patternOptions = ['Solid', 'Stripes', 'Checks', 'Florals', 'Abstract', 'Minimal Print'];
@@ -30,6 +33,8 @@ const identityOptions: Array<TasteProfile['styleIdentity']> = ['minimal', 'class
 
 export default function ProfileScreen(): React.JSX.Element {
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const { compact, rs } = useResponsive();
   const navigation = useNavigation<NavigationProp<RootStackParamList & MainTabParamList>>();
   const user = useUserStore((s) => s.profile);
   const savePreferences = useUserStore((s) => s.savePreferences);
@@ -88,18 +93,20 @@ export default function ProfileScreen(): React.JSX.Element {
   const nextMilestone = learningProgress?.nextMilestone ?? 5;
   const previousMilestone = Math.max(0, nextMilestone - 5);
   const progressValue = Math.min(100, Math.max(0, ((interactions - previousMilestone) / 5) * 100));
-  const topCardWidth = (width - 16 * 2 - 16) / 2;
-  const insightCols = width >= 900 ? 3 : 2;
-  const insightCardWidth = (width - 16 * 2 - 12 * (insightCols - 1)) / insightCols;
+  const contentPadding = rs(16, 12, 24);
+  const topCardWidth = compact ? width - contentPadding * 2 : (width - contentPadding * 2 - 16) / 2;
+  const insightCols = compact ? 1 : width >= 900 ? 3 : 2;
+  const insightCardWidth = (width - contentPadding * 2 - 12 * (insightCols - 1)) / insightCols;
+  const headerHeight = Math.max(64, insets.top + rs(54, 50, 64));
 
   useEffect(() => {
     progressAnim.setValue(0);
     Animated.timing(progressAnim, {
-      toValue: 72,
+      toValue: progressValue,
       duration: 700,
       useNativeDriver: false,
     }).start();
-  }, [progressAnim]);
+  }, [progressAnim, progressValue]);
 
   const learningLevel = useMemo(() => {
     if (interactions >= 20) return 'Lvl 5 Visionary';
@@ -108,6 +115,9 @@ export default function ProfileScreen(): React.JSX.Element {
     if (interactions >= 5) return 'Lvl 2 Explorer';
     return 'Lvl 1 Starter';
   }, [interactions]);
+
+  const apiCallsThisSession = requestLog.filter((entry) => !entry.cacheHit).length;
+  const cacheHitRate = getCacheHitRate();
 
   const cycleFitPreference = (): void => {
     const index = fitOptions.indexOf(fitPreference);
@@ -136,9 +146,46 @@ export default function ProfileScreen(): React.JSX.Element {
     }, 'ProfileScreen.savePreferences');
   };
 
+  const openSettingsMenu = (): void => {
+    Alert.alert('Profile settings', 'Choose what you want to manage.', [
+      {
+        text: 'Retake Skin Tone',
+        onPress: () => navigation.navigate('SkinTone', { returnToProfile: true }),
+      },
+      {
+        text: 'Open Closet',
+        onPress: () => navigation.navigate('Closet'),
+      },
+      {
+        text: 'Cancel',
+        style: 'cancel',
+      },
+    ]);
+  };
+
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <BlurView intensity={20} tint="dark" style={styles.headerBar}>
+    <ScrollView
+      contentContainerStyle={[
+        styles.container,
+        {
+          paddingHorizontal: contentPadding,
+          paddingBottom: Math.max(28, insets.bottom + rs(18, 12, 28)),
+        },
+      ]}
+      showsVerticalScrollIndicator={false}
+    >
+      <BlurView
+        intensity={20}
+        tint="dark"
+        style={[
+          styles.headerBar,
+          {
+            height: headerHeight,
+            paddingTop: insets.top,
+            paddingHorizontal: rs(24, 14, 28),
+          },
+        ]}
+      >
         <View style={styles.headerLeft}>
           <View style={styles.headerPersonCircle}>
             <MaterialIcons name="person" size={14} color="#e6c487" />
@@ -147,10 +194,13 @@ export default function ProfileScreen(): React.JSX.Element {
         </View>
 
         <Pressable
+          onPress={openSettingsMenu}
           onHoverIn={() => setSettingsHovered(true)}
           onHoverOut={() => setSettingsHovered(false)}
           onPressIn={() => setSettingsPressed(true)}
           onPressOut={() => setSettingsPressed(false)}
+          accessibilityRole="button"
+          accessibilityLabel="Open profile settings"
           style={[
             styles.settingsBtn,
             settingsHovered ? styles.settingsBtnHover : null,
@@ -161,7 +211,7 @@ export default function ProfileScreen(): React.JSX.Element {
         </Pressable>
       </BlurView>
 
-      <View style={styles.topGrid}>
+      <View style={[styles.topGrid, compact ? styles.topGridCompact : null]}>
         <Pressable
           onHoverIn={() => setGlowHovered(true)}
           onHoverOut={() => setGlowHovered(false)}
@@ -199,7 +249,7 @@ export default function ProfileScreen(): React.JSX.Element {
           </View>
         </Pressable>
 
-        <View style={[styles.tasteCard, { width: topCardWidth, minHeight: 160 }]}> 
+        <View style={[styles.tasteCard, { width: topCardWidth, minHeight: 160 }]}>
           <View style={styles.tasteHeaderRow}>
             <Text style={styles.miniLabel}>TASTE LEARNING</Text>
             <View style={styles.improvingBadge}>
@@ -247,11 +297,11 @@ export default function ProfileScreen(): React.JSX.Element {
         ) : (
           <View style={styles.insightGrid}>
             {insights.slice(0, 6).map((insight) => (
-              <Pressable key={insight.id} style={[styles.insightCard, { width: insightCardWidth }]}>
+              <View key={insight.id} style={[styles.insightCard, { width: insightCardWidth }]}>
                 <MaterialIcons name="auto-awesome" size={30} color="#e6c487" style={styles.insightIcon} />
                 <Text style={styles.insightCardTitle}>{insight.text.split('. ')[0]}</Text>
                 <Text style={styles.insightCardSub}>{insight.text}</Text>
-              </Pressable>
+              </View>
             ))}
           </View>
         )}
@@ -266,7 +316,12 @@ export default function ProfileScreen(): React.JSX.Element {
         <View style={styles.preferencesBox}>
           <View>
             <Text style={styles.prefLabel}>COLOR PALETTE</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.colorsRow}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.colorsRow}
+            >
               {palette.map((color) => {
                 const selected = lovedColors.includes(color);
                 return (
@@ -277,9 +332,9 @@ export default function ProfileScreen(): React.JSX.Element {
                   />
                 );
               })}
-              <Pressable style={styles.addColorBtn}>
+              <View style={styles.addColorBtn}>
                 <MaterialIcons name="add" size={14} color="#998f81" />
-              </Pressable>
+              </View>
             </ScrollView>
           </View>
 
@@ -307,7 +362,7 @@ export default function ProfileScreen(): React.JSX.Element {
             </View>
           </View>
 
-          <View style={styles.selectGrid}>
+          <View style={[styles.selectGrid, compact ? styles.selectGridCompact : null]}>
             <View style={styles.selectCol}>
               <Text style={styles.selectLabel}>FIT</Text>
               <Pressable style={styles.selectBox} onPress={cycleFitPreference}>
@@ -362,10 +417,18 @@ export default function ProfileScreen(): React.JSX.Element {
         </View>
       </View>
 
-      <View style={styles.learningMetaRow}>
+      <View style={[styles.learningMetaRow, compact ? styles.learningMetaRowCompact : null]}>
         <Text style={styles.learningMetaText}>Next milestone: {nextMilestone}</Text>
         <Text style={styles.learningMetaText}>Current step: {progressValue.toFixed(0)}%</Text>
       </View>
+
+      {__DEV__ ? (
+        <View style={styles.devDebugCard}>
+          <Text style={styles.devDebugTitle}>Debug Session Stats</Text>
+          <Text style={styles.devDebugLine}>API calls this session: {apiCallsThisSession}</Text>
+          <Text style={styles.devDebugLine}>Cache hit rate: {cacheHitRate.toFixed(0)}%</Text>
+        </View>
+      ) : null}
     </ScrollView>
   );
 }
@@ -377,8 +440,6 @@ const styles = StyleSheet.create({
     paddingBottom: 28,
   },
   headerBar: {
-    height: 64,
-    paddingHorizontal: 24,
     backgroundColor: 'rgba(10,10,10,0.60)',
     borderRadius: 16,
     marginTop: 10,
@@ -418,6 +479,9 @@ const styles = StyleSheet.create({
   topGrid: {
     flexDirection: 'row',
     gap: 16,
+  },
+  topGridCompact: {
+    flexDirection: 'column',
   },
   skinCard: {
     backgroundColor: '#201f1f',
@@ -705,6 +769,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 24,
   },
+  selectGridCompact: {
+    flexDirection: 'column',
+    gap: 12,
+  },
   selectCol: {
     flex: 1,
   },
@@ -786,9 +854,35 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
+  learningMetaRowCompact: {
+    flexDirection: 'column',
+    gap: 6,
+  },
   learningMetaText: {
     color: '#998f81',
     fontFamily: 'Inter_400Regular',
     fontSize: 11,
+  },
+  devDebugCard: {
+    marginTop: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(230,196,135,0.20)',
+    backgroundColor: '#1a1713',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 4,
+  },
+  devDebugTitle: {
+    color: '#e6c487',
+    fontFamily: 'Inter_700Bold',
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  devDebugLine: {
+    color: '#d0c5b5',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
   },
 });

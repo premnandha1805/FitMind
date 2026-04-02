@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { executeSqlWithRetry } from '../db/queries';
+import { Platform } from 'react-native';
+import { executeSqlWithRetry, executeTransactionWithRetry } from '../db/queries';
 import { generateOutfits } from '../services/outfitEngine';
 import { ClothingItem, Outfit, TasteProfile, UserProfile } from '../types/models';
 import { safeAsync } from '../utils/safeAsync';
@@ -18,6 +19,11 @@ export const useOutfitStore = create<OutfitState>((set) => ({
   note: null,
   candidatePool: [],
   generate: async (occasion, closetItems, user, taste) => {
+    if (Platform.OS === 'web') {
+      set({ outfits: [], loading: false, note: null, candidatePool: [] });
+      return;
+    }
+
     const tops = closetItems.filter((item) => item.category === 'top');
     const bottoms = closetItems.filter((item) => item.category === 'bottom');
     const shoes = closetItems.filter((item) => item.category === 'shoes');
@@ -50,25 +56,29 @@ export const useOutfitStore = create<OutfitState>((set) => ({
       return;
     }
 
-    await Promise.all(data.map((outfit) => safeAsync(async () => {
-      await executeSqlWithRetry(
-        `INSERT OR REPLACE INTO outfits
-         (id, occasion, item_ids, color_score, skin_score, gemini_score, final_score, worn_on, liked, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-        [
-          outfit.id,
-          outfit.occasion,
-          JSON.stringify(outfit.itemIds),
-          Math.round(outfit.colorScore),
-          Math.round(outfit.skinScore),
-          Math.round(outfit.geminiScore),
-          Math.round(outfit.finalScore),
-          outfit.wornOn,
-          outfit.liked,
-          outfit.createdAt,
-        ]
-      );
-    }, 'Outfit.saveResult')));
+    const queries = data.map((outfit) => ({
+      sql: `INSERT OR REPLACE INTO outfits
+            (id, occasion, item_ids, color_score, skin_score, gemini_score, final_score, worn_on, liked, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      params: [
+        outfit.id,
+        outfit.occasion,
+        JSON.stringify(outfit.itemIds),
+        Math.round(outfit.colorScore),
+        Math.round(outfit.skinScore),
+        Math.round(outfit.geminiScore),
+        Math.round(outfit.finalScore),
+        outfit.wornOn,
+        outfit.liked,
+        outfit.createdAt,
+      ],
+    }));
+
+    await safeAsync(
+      async () => executeTransactionWithRetry(queries),
+      'Outfit.saveTransaction'
+    );
+
 
     set({ outfits: data.slice(0, 3), loading: false, candidatePool: [] });
   },

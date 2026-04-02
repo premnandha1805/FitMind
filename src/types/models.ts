@@ -1,6 +1,30 @@
 export type Undertone = 'Warm' | 'Cool' | 'Neutral';
 
-export type Category = 'top' | 'bottom' | 'shoes' | 'accessory' | 'outerwear' | 'other';
+export type Category = 'top' | 'bottom' | 'shoes' | 'accessory' | 'outerwear';
+
+export type ColorFamily =
+  | 'red'
+  | 'orange'
+  | 'yellow'
+  | 'green'
+  | 'blue'
+  | 'purple'
+  | 'pink'
+  | 'brown'
+  | 'grey'
+  | 'black'
+  | 'white'
+  | 'neutral'
+  | 'warm'
+  | 'cool';
+
+export type ClothingPattern = 'solid' | 'stripes' | 'checks' | 'floral' | 'print' | 'geometric' | 'abstract' | 'other';
+
+export type ClothingStyleType = 'casual' | 'formal' | 'party' | 'ethnic' | 'professional' | 'sports' | 'smart_casual';
+
+export type FitType = 'slim' | 'regular' | 'relaxed' | 'oversized' | 'fitted';
+
+export type ClothingSeason = 'summer' | 'winter' | 'spring' | 'autumn' | 'all-season';
 
 export type PatternType = 'solid' | 'subtle' | 'bold' | 'all' | 'unknown';
 
@@ -28,11 +52,17 @@ export interface ClothingItem {
   id: string;
   imagePath: string;
   category: Category;
+  subcategory: string;
   colorHsl: string;
   colorHex: string;
-  pattern: string | null;
-  styleType: string;
-  season: string | null;
+  colorFamily: ColorFamily;
+  pattern: ClothingPattern;
+  styleType: ClothingStyleType;
+  fitType: FitType;
+  season: ClothingSeason;
+  userCorrected: number;
+  aiConfidence: number;
+  aiRawLabel: string;
   timesWorn: number;
   lastWorn: string | null;
   createdAt: string;
@@ -70,11 +100,20 @@ export interface OutfitCandidate {
 
 export interface FitCheckResult {
   skin_tone_match: { score: number; verdict: string; reason: string };
-  color_harmony: { score: number; verdict: string; reason: string };
+  color_harmony: { score: number; verdict: string; reason: string; harmony_type?: string };
   proportion: { score: number; verdict: string; reason: string };
   styling_tips: string[];
   color_tips: string[];
-  swap_suggestions: Array<{ item_type: string; reason: string; color: string; item_id?: string }>;
+  swap_suggestions: Array<{
+    item_type: string;
+    current_issue?: string;
+    suggested_color?: string;
+    reason: string;
+    color?: string;
+    item_id?: string;
+  }>;
+  what_works: string[];
+  confidence_tip?: string;
   style_score: number;
   one_line_verdict: string;
 }

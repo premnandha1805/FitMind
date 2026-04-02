@@ -17,7 +17,7 @@ export const Colors = {
   OUTLINE:      '#4d463a',
   SKIN_TEAL:    '#4db6ac',
   AI_PURPLE:    '#b39ddb',
-};
+} as const;
 
 export const Fonts = {
   HEADLINE:      'NotoSerif_700Bold',
@@ -25,14 +25,14 @@ export const Fonts = {
   BODY:          'Inter_400Regular',
   BODY_MEDIUM:   'Inter_500Medium',
   BODY_SEMIBOLD: 'Inter_600SemiBold',
-};
+} as const;
 
 export const Radius = {
   PILL:  9999,
   CARD:  16,
   SMALL: 8,
   SHEET: 24,
-};
+} as const;
 
 export const Shadow = {
   CARD: {
@@ -49,4 +49,4 @@ export const Shadow = {
     shadowRadius: 20,
     elevation: 8,
   },
-};
+} as const;

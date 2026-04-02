@@ -13,11 +13,13 @@ import { StackScreenProps } from '@react-navigation/stack';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../navigation/types';
 import { useOutfitStore } from '../store/useOutfitStore';
 import { useTasteStore } from '../store/useTasteStore';
 import { useClosetStore } from '../store/useClosetStore';
 import { useUserStore } from '../store/useUserStore';
+import { useResponsive } from '../utils/responsive';
 
 type Props = StackScreenProps<RootStackParamList, 'WhyThisOutfit'>;
 
@@ -47,6 +49,8 @@ const REASON_META = [
 ] as const;
 
 export default function WhyThisOutfitScreen({ route, navigation }: Props): React.JSX.Element {
+  const insets = useSafeAreaInsets();
+  const { compact, rs } = useResponsive();
   const outfit = useOutfitStore((s) => s.outfits.find((x) => x.id === route.params.outfitId));
   const profile = useTasteStore((s) => s.profile);
   const closetItems = useClosetStore((s) => s.items);
@@ -87,11 +91,23 @@ export default function WhyThisOutfitScreen({ route, navigation }: Props): React
     [outfit.reasons]
   );
 
-  const heroWidth = width - 48;
+  const heroWidth = Math.min(width - rs(28, 20, 48), 640);
+  const headerHeight = Math.max(64, insets.top + rs(52, 48, 64));
 
   return (
     <View style={styles.screen}>
-      <BlurView intensity={22} tint="dark" style={styles.headerBar}>
+      <BlurView
+        intensity={22}
+        tint="dark"
+        style={[
+          styles.headerBar,
+          {
+            height: headerHeight,
+            paddingTop: insets.top,
+            paddingHorizontal: rs(24, 14, 28),
+          },
+        ]}
+      >
         <Pressable style={styles.headerLeft} onPress={() => navigation.goBack()}>
           <MaterialIcons name="arrow-back" size={22} color="#C9A96E" />
           <Text style={styles.headerTitle}>Why This Outfit</Text>
@@ -105,7 +121,17 @@ export default function WhyThisOutfitScreen({ route, navigation }: Props): React
         </View>
       </BlurView>
 
-      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.container,
+          {
+            paddingTop: rs(24, 16, 28),
+            paddingHorizontal: rs(24, 14, 28),
+            paddingBottom: Math.max(48, insets.bottom + rs(20, 14, 28)),
+          },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={[styles.heroCard, { width: heroWidth }]}> 
           {heroUri ? (
             <Image source={{ uri: heroUri }} resizeMode="cover" style={styles.heroImage} />
@@ -188,7 +214,7 @@ export default function WhyThisOutfitScreen({ route, navigation }: Props): React
             <View style={styles.tasteTopRow}>
               <View>
                 <Text style={styles.tasteKicker}>TASTE EVOLUTION</Text>
-                <Text style={styles.tasteLevel}>Artisan</Text>
+                <Text style={[styles.tasteLevel, { fontSize: rs(24, 20, 26) }]}>Artisan</Text>
               </View>
 
               <View style={styles.tasteSignalsWrap}>
@@ -207,7 +233,7 @@ export default function WhyThisOutfitScreen({ route, navigation }: Props): React
                 />
               </View>
 
-              <View style={styles.tasteLabelsRow}>
+              <View style={[styles.tasteLabelsRow, compact ? styles.tasteLabelsRowCompact : null]}>
                 <Text style={styles.tasteLabelLeft}>Current: Artisan</Text>
                 <Text style={styles.tasteLabelRight}>Next: Visionary (82 more edits)</Text>
               </View>
@@ -235,8 +261,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
   },
   headerBar: {
-    height: 64,
-    paddingHorizontal: 24,
     backgroundColor: 'rgba(10,10,10,0.60)',
     flexDirection: 'row',
     alignItems: 'center',
@@ -415,6 +439,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-end',
+    gap: 10,
   },
   tasteKicker: {
     marginBottom: 8,
@@ -467,6 +492,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 10,
+  },
+  tasteLabelsRowCompact: {
+    flexDirection: 'column',
+    alignItems: 'flex-start',
   },
   tasteLabelLeft: {
     color: '#d0c5b5',

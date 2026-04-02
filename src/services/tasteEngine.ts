@@ -1,5 +1,5 @@
 import { getAll, getOne } from '../db/queries';
-import { TasteProfile, OutfitCandidate } from '../types/models';
+import { ClothingItem, TasteProfile, OutfitCandidate } from '../types/models';
 import { clamp } from '../utils/colorUtils';
 
 interface TasteRow {
@@ -52,7 +52,7 @@ export async function getTasteProfile(): Promise<TasteProfile> {
 
 export function scoreCandidateAgainstTaste(candidate: OutfitCandidate, tasteProfile: TasteProfile): number {
   const patterns = [candidate.top.pattern, candidate.bottom.pattern, candidate.shoes?.pattern, candidate.accessory?.pattern]
-    .filter((x): x is string => Boolean(x));
+    .filter((x): x is ClothingItem['pattern'] => Boolean(x));
   const colors = [candidate.top.colorHex, candidate.bottom.colorHex, candidate.shoes?.colorHex, candidate.accessory?.colorHex]
     .filter((x): x is string => Boolean(x));
 
@@ -90,7 +90,7 @@ export function scoreCandidateAgainstTaste(candidate: OutfitCandidate, tasteProf
 
 export function explainOutfitChoice(candidate: OutfitCandidate, tasteProfile: TasteProfile): string[] {
   const reasons: string[] = [];
-  if (candidate.layer2Score >= 8) reasons.push(`Warm coral matches your skin tone (${candidate.layer2Score.toFixed(0)}/10)`);
+  if (candidate.layer2Score >= 8) reasons.push(`Top color complements your skin tone beautifully (${candidate.layer2Score.toFixed(0)}/10)`);
   if ((candidate.top.pattern ?? 'solid') === 'solid') reasons.push('Solid pattern - matches your style preference');
   if (candidate.layer1Score >= 7) reasons.push('High color harmony supports your preferred contrast');
   if (tasteProfile.lovedColors.includes(candidate.top.colorHex)) reasons.push('Top color is one of your saved favorites');

@@ -12,11 +12,15 @@ import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import Slider from '@react-native-community/slider';
 import { MaterialIcons } from '@expo/vector-icons';
+import { NavigationProp, useNavigation } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { RootStackParamList } from '../navigation/types';
 import { OCCASION_KEYWORDS } from '../constants/occasions';
 import { useClosetStore } from '../store/useClosetStore';
 import { useOutfitStore } from '../store/useOutfitStore';
 import { useTasteStore } from '../store/useTasteStore';
 import { useUserStore } from '../store/useUserStore';
+import { useResponsive } from '../utils/responsive';
 
 function mapOccasion(input: string): string {
   const lower = input.toLowerCase();
@@ -37,7 +41,13 @@ const scenarioChips = ['Interview', 'Rooftop', 'Gala', 'Dinner'];
 const timeOptions = ['Morning', 'Afternoon', 'Evening'];
 const weatherOptions = ['Warm', 'Crisp', 'Cold'];
 
+const timeIcons: Record<string, any> = { Morning: 'wb-sunny', Afternoon: 'brightness-5', Evening: 'nights-stay' };
+const weatherIcons: Record<string, any> = { Warm: 'wb-sunny', Crisp: 'cloud', Cold: 'ac-unit' };
+
 export default function OccasionScreen(): React.JSX.Element {
+  const insets = useSafeAreaInsets();
+  const navigation = useNavigation<NavigationProp<RootStackParamList>>();
+  const { compact, rs } = useResponsive();
   const [eventText, setEventText] = useState('Rooftop work social');
   const [selectedOccasion, setSelectedOccasion] = useState('work');
   const [selectedScenario, setSelectedScenario] = useState('Rooftop');
@@ -61,11 +71,14 @@ export default function OccasionScreen(): React.JSX.Element {
   const formalityTag = useMemo(() => {
     if (formality < 35) return 'Relaxed';
     if (formality < 70) return 'Smart Casual';
-    return 'Formal';
+    return 'Black Tie';
   }, [formality]);
 
   const onGenerate = (): void => {
-    if (!user || !taste) return;
+    if (!user || !taste) {
+      Alert.alert('Setup Required', 'Please complete your profile setup before generating outfits.');
+      return;
+    }
     void generate(mapped, items, user, taste);
   };
 
@@ -73,23 +86,47 @@ export default function OccasionScreen(): React.JSX.Element {
     Alert.alert('FitMind', `Saved: ${selectedOccasion}, ${timeOfDay}, ${weather}`);
   };
 
+  const headerHeight = Math.max(64, insets.top + rs(54, 50, 64));
+
   return (
     <View style={styles.screen}>
-      <BlurView intensity={20} tint="dark" style={styles.header}>
-        <Pressable style={styles.headerIconBtn}>
+      <BlurView
+        intensity={20}
+        tint="dark"
+        style={[
+          styles.header,
+          {
+            height: headerHeight,
+            paddingTop: insets.top,
+            paddingHorizontal: rs(24, 14, 28),
+          },
+        ]}
+      >
+        <Pressable style={styles.headerIconBtn} onPress={() => navigation.goBack()}>
           <MaterialIcons name="arrow-back" size={20} color="#e6c487" />
         </Pressable>
         <Text style={styles.headerTitle}>Select Occasion</Text>
-        <Pressable style={styles.headerIconBtn}>
-          <MaterialIcons name="settings" size={20} color="#e6c487" />
+        <Pressable style={styles.headerIconBtn} onPress={() => navigation.navigate('Profile')}>
+          <MaterialIcons name="person-outline" size={20} color="#e6c487" />
         </Pressable>
       </BlurView>
 
-      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.container,
+          {
+            paddingTop: headerHeight + rs(20, 16, 26),
+            paddingHorizontal: rs(24, 14, 28),
+            paddingBottom: Math.max(180, insets.bottom + rs(140, 126, 172)),
+          },
+        ]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.introCard}>
           <View style={styles.introGlow} />
           <Text style={styles.introLabel}>THEME</Text>
-          <Text style={styles.introTitle}>Curate for the Moment</Text>
+          <Text style={[styles.introTitle, { fontSize: rs(32, 26, 34), lineHeight: rs(38, 32, 42) }]}>Curate for the Moment</Text>
           <Text style={styles.introSub}>
             Define the essence of your next outing and let FitMind weave the perfect silhouette.
           </Text>
@@ -105,6 +142,7 @@ export default function OccasionScreen(): React.JSX.Element {
                   key={option.key}
                   style={({ pressed }) => [
                     styles.gridCard,
+                    compact ? { width: '100%' } : null,
                     selected ? styles.gridCardActive : null,
                     { transform: [{ scale: pressed ? 0.97 : 1 }] },
                   ]}
@@ -144,7 +182,7 @@ export default function OccasionScreen(): React.JSX.Element {
           </View>
         </View>
 
-        <View style={styles.contextGrid}>
+        <View style={[styles.contextGrid, compact ? styles.contextGridCompact : null]}>
           <View style={styles.contextField}>
             <Text style={styles.contextLabel}>Time of Day</Text>
             <Pressable
@@ -155,7 +193,7 @@ export default function OccasionScreen(): React.JSX.Element {
                 setTimeOfDay(timeOptions[next]);
               }}
             >
-              <MaterialIcons name="nights-stay" size={18} color="#e6c487" />
+              <MaterialIcons name={timeIcons[timeOfDay] || 'nights-stay'} size={18} color="#e6c487" />
               <Text style={styles.contextText}>{timeOfDay}</Text>
             </Pressable>
           </View>
@@ -170,7 +208,7 @@ export default function OccasionScreen(): React.JSX.Element {
                 setWeather(weatherOptions[next]);
               }}
             >
-              <MaterialIcons name="cloud" size={18} color="#e6c487" />
+              <MaterialIcons name={weatherIcons[weather] || 'cloud'} size={18} color="#e6c487" />
               <Text style={styles.contextText}>{weather}</Text>
             </Pressable>
           </View>
@@ -178,7 +216,12 @@ export default function OccasionScreen(): React.JSX.Element {
 
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Specific Scenario</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.chipsRow}
+          >
             {scenarioChips.map((chip) => {
               const selected = selectedScenario === chip;
               return (
@@ -215,14 +258,24 @@ export default function OccasionScreen(): React.JSX.Element {
             <Text style={styles.resultText}>
               Perfect for {eventText || 'your event'}. The color combination is especially flattering for your tone.
             </Text>
-            {best.reasons.map((reason) => <Text key={reason} style={styles.resultReason}>- {reason}</Text>)}
+            {best.reasons.map((reason, idx) => <Text key={`${reason}-${idx}`} style={styles.resultReason}>- {reason}</Text>)}
           </View>
         ) : null}
 
         <View style={styles.scrollSpacer} />
       </ScrollView>
 
-      <BlurView intensity={20} tint="dark" style={styles.footer}>
+      <BlurView
+        intensity={20}
+        tint="dark"
+        style={[
+          styles.footer,
+          {
+            paddingHorizontal: rs(24, 14, 28),
+            paddingBottom: Math.max(20, insets.bottom + 8),
+          },
+        ]}
+      >
         <Pressable style={({ pressed }) => [{ transform: [{ scale: pressed ? 0.98 : 1 }] }]} onPress={onGenerate}>
           <LinearGradient colors={['#e6c487', '#c9a96e']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.primaryBtn}>
             <Text style={styles.primaryBtnText}>Generate Outfit Suggestions</Text>
@@ -245,8 +298,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 20,
-    height: 64,
-    paddingHorizontal: 24,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -387,6 +438,9 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 28,
   },
+  contextGridCompact: {
+    flexDirection: 'column',
+  },
   contextField: { flex: 1, gap: 8 },
   contextLabel: {
     color: '#998f81',
@@ -502,7 +556,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: 'rgba(229,226,225,0.05)',
     backgroundColor: 'rgba(19,19,19,0.90)',
-    paddingHorizontal: 24,
     paddingTop: 14,
     paddingBottom: 20,
     gap: 10,

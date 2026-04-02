@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
-import { extractJSON, getGeminiKey, prepareImageForGemini } from './gemini';
+import { getGeminiKey, prepareImageForGemini, validateGeminiResponse } from './gemini';
 import { CAT_MAP, resolveCategory, normalizePattern, normalizeStyle } from '../constants/categoryMap';
 import { Category, ClothingPattern, ClothingStyleType, ClothingSeason, FitType } from '../types/models';
 
@@ -171,7 +171,12 @@ async function callGeminiClassify(imageUri: string): Promise<unknown> {
     throw new Error('Gemini classification returned empty response');
   }
 
-  return extractJSON(text) ?? JSON.parse(text);
+  const parsed = validateGeminiResponse(text);
+  if (!parsed) {
+    throw new Error('Gemini classification failed to parse');
+  }
+
+  return parsed;
 }
 
 function validateClassification(raw: any): ClassificationResult {

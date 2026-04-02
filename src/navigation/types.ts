@@ -4,11 +4,12 @@ export type RootStackParamList = {
   StylePreferences: undefined;
   ClosetIntro: undefined;
   MainTabs: undefined;
+  Profile: undefined;
   AddItem:
     | {
       existingItemId?: string;
       prefill?: {
-        category?: 'top' | 'bottom' | 'shoes' | 'accessory' | 'outerwear' | 'other';
+        category?: 'top' | 'bottom' | 'shoes' | 'accessory' | 'outerwear';
         pattern?: string;
         styleType?: string;
         colorHex?: string;
@@ -20,10 +21,8 @@ export type RootStackParamList = {
 
 export type MainTabParamList = {
   Home: undefined;
-  StyleAdvisor: undefined;
+  StyleAdvisor: { initialMode?: 'chat' | 'planner' } | undefined;
   Closet: undefined;
   FitCheck: undefined;
-  Occasion: undefined;
   History: undefined;
-  Profile: undefined;
 };

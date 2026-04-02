@@ -16,15 +16,19 @@ import { StackScreenProps } from '@react-navigation/stack';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { detectSkinTone, DetectSkinToneResult } from '../services/skinToneEngine';
 import { RootStackParamList } from '../navigation/types';
 import { SKIN_TONES } from '../constants/skinTones';
 import { useUserStore } from '../store/useUserStore';
 import { safeAsync } from '../utils/safeAsync';
+import { useResponsive } from '../utils/responsive';
 
 type Props = StackScreenProps<RootStackParamList, 'SkinTone'>;
 
 export default function SkinToneScreen({ navigation, route }: Props): React.JSX.Element {
+  const insets = useSafeAreaInsets();
+  const { compact, rs } = useResponsive();
   const returnToProfile = Boolean(route.params?.returnToProfile);
   const saveProfile = useUserStore((s) => s.saveProfile);
   const profile = useUserStore((s) => s.profile);
@@ -70,6 +74,9 @@ export default function SkinToneScreen({ navigation, route }: Props): React.JSX.
     outputRange: ['0deg', '360deg'],
   });
 
+  const ringSize = rs(256, 196, 286);
+  const headerHeight = Math.max(64, insets.top + rs(54, 50, 64));
+
   const takePhoto = async (): Promise<void> => {
     await safeAsync(async () => {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
@@ -98,10 +105,11 @@ export default function SkinToneScreen({ navigation, route }: Props): React.JSX.
     const selectedUndertone = manualUndertone ?? (detected && detected.detected ? detected.undertone : null);
 
     if (!selectedTone || !selectedUndertone) {
+      Alert.alert('Selection required', 'Please select both a skin tone and undertone before confirming.');
       return;
     }
 
-    await saveProfile({ skinToneId: final.toneId, skinUndertone: final.undertone, skinImagePath: photo, onboarded: 0 });
+    await saveProfile({ skinToneId: selectedTone, skinUndertone: selectedUndertone, skinImagePath: photo, onboarded: 0 });
     if (returnToProfile) {
       navigation.goBack();
       return;
@@ -135,7 +143,18 @@ export default function SkinToneScreen({ navigation, route }: Props): React.JSX.
 
   return (
     <View style={styles.screen}>
-      <BlurView intensity={25} tint="dark" style={styles.headerBar}>
+      <BlurView
+        intensity={25}
+        tint="dark"
+        style={[
+          styles.headerBar,
+          {
+            height: headerHeight,
+            paddingTop: insets.top,
+            paddingHorizontal: rs(24, 14, 28),
+          },
+        ]}
+      >
         <View style={styles.headerLeft}>
           <MaterialIcons name="face" size={26} color="#E6C487" />
           <Text style={styles.headerBrand}>FitMind</Text>
@@ -149,14 +168,23 @@ export default function SkinToneScreen({ navigation, route }: Props): React.JSX.
         </View>
       </BlurView>
 
-      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.container,
+          {
+            paddingHorizontal: rs(24, 14, 28),
+            paddingBottom: Math.max(36, insets.bottom + rs(20, 14, 30)),
+          },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.textSection}>
-          <Text style={styles.title}>Let's personalize your style</Text>
+          <Text style={[styles.title, { fontSize: rs(32, 26, 36), lineHeight: rs(40, 32, 44) }]}>Let's personalize your style</Text>
           <Text style={styles.subtitle}>Take a selfie in natural light for best results</Text>
         </View>
 
         <View style={styles.cameraArea}>
-          <Animated.View style={[styles.cameraOuterRing, { transform: [{ rotate: ringSpin }] }]}>
+          <Animated.View style={[styles.cameraOuterRing, { width: ringSize, height: ringSize, borderRadius: ringSize / 2, transform: [{ rotate: ringSpin }] }]}>
             <View style={styles.cameraInnerCircle}>
               {photo ? (
                 <Image source={{ uri: photo }} style={styles.cameraImage} resizeMode="cover" />
@@ -187,12 +215,12 @@ export default function SkinToneScreen({ navigation, route }: Props): React.JSX.
           </Pressable>
         </Animated.View>
 
-      {detecting ? (
-        <View style={styles.progressWrap}>
-          <Text style={styles.progressText}>Reading your skin tone...</Text>
-          <View style={styles.progressTrack}><View style={styles.progressFill} /></View>
-        </View>
-      ) : null}
+        {detecting ? (
+          <View style={styles.progressWrap}>
+            <Text style={styles.progressText}>Reading your skin tone...</Text>
+            <View style={styles.progressTrack}><View style={styles.progressFill} /></View>
+          </View>
+        ) : null}
 
         {detected ? (
           <BlurView intensity={20} tint="dark" style={styles.detectCard}>
@@ -213,7 +241,7 @@ export default function SkinToneScreen({ navigation, route }: Props): React.JSX.
 
             <Text style={styles.manualLabel}>NOT QUITE RIGHT? CHOOSE MANUALLY:</Text>
 
-            <View style={styles.toneCirclesRow}>
+            <View style={[styles.toneCirclesRow, compact ? styles.toneCirclesRowCompact : null]}>
               {SKIN_TONES.map((tone) => {
                 const selected = final.toneId === tone.id;
                 return (
@@ -228,7 +256,7 @@ export default function SkinToneScreen({ navigation, route }: Props): React.JSX.
               })}
             </View>
 
-            <View style={styles.undertoneRow}>
+            <View style={[styles.undertoneRow, compact ? styles.undertoneRowCompact : null]}>
               {(['Warm', 'Neutral', 'Cool'] as const).map((tone) => {
                 const selected = displayedUndertone === tone;
                 return (
@@ -251,7 +279,7 @@ export default function SkinToneScreen({ navigation, route }: Props): React.JSX.
           </BlurView>
         ) : null}
 
-        <Animated.View style={[styles.confirmWrap, { transform: [{ scale: confirmPressed ? 0.98 : 1 }] }]}> 
+        <Animated.View style={[styles.confirmWrap, { transform: [{ scale: confirmPressed ? 0.98 : 1 }] }]}>
           <Pressable
             onPress={confirm}
             disabled={!canConfirm}
@@ -297,8 +325,6 @@ const styles = StyleSheet.create({
   },
   headerBar: {
     marginTop: 0,
-    height: 64,
-    paddingHorizontal: 24,
     backgroundColor: 'rgba(10,10,10,0.60)',
     flexDirection: 'row',
     alignItems: 'center',
@@ -337,7 +363,7 @@ const styles = StyleSheet.create({
     paddingBottom: 36,
   },
   textSection: {
-    marginTop: 96,
+    marginTop: 24,
     marginBottom: 40,
     alignItems: 'center',
   },
@@ -510,6 +536,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 4,
   },
+  toneCirclesRowCompact: {
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 10,
+  },
   toneCircleWrap: {
     width: 40,
     height: 40,
@@ -537,6 +568,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 12,
+  },
+  undertoneRowCompact: {
+    flexWrap: 'wrap',
   },
   undertonePill: {
     borderRadius: 9999,
