@@ -4,7 +4,17 @@ export type RootStackParamList = {
   StylePreferences: undefined;
   ClosetIntro: undefined;
   MainTabs: undefined;
-  AddItem: undefined;
+  AddItem:
+    | {
+      existingItemId?: string;
+      prefill?: {
+        category?: 'top' | 'bottom' | 'shoes' | 'accessory' | 'outerwear' | 'other';
+        pattern?: string;
+        styleType?: string;
+        colorHex?: string;
+      };
+    }
+    | undefined;
   WhyThisOutfit: { outfitId: string };
 };
 

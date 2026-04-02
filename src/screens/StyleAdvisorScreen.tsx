@@ -9,7 +9,9 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { executeSqlWithRetry } from '../db/queries';
 import { AdvisorMessage } from '../components/AdvisorMessage';
@@ -113,14 +115,21 @@ function TypingDots(): React.JSX.Element {
   }, [anim]);
 
   return (
-    <View style={styles.typingWrap}>
-      {[0, 1, 2].map((index) => {
-        const opacity = anim.interpolate({
-          inputRange: [0, 0.33, 0.66, 1],
-          outputRange: index === 0 ? [0.3, 1, 0.3, 0.3] : index === 1 ? [0.3, 0.3, 1, 0.3] : [0.3, 0.3, 0.3, 1],
-        });
-        return <Animated.View key={index} style={[styles.dot, { opacity }]} />;
-      })}
+    <View style={styles.typingCard}>
+      <View style={styles.typingWrap}>
+        {[0, 1, 2].map((index) => {
+          const progress = anim.interpolate({
+            inputRange: [0, 0.33, 0.66, 1],
+            outputRange: index === 0 ? [0, 1, 0, 0] : index === 1 ? [0, 0, 1, 0] : [0, 0, 0, 1],
+          });
+
+          const scale = progress.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.2] });
+          const opacity = progress.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] });
+
+          return <Animated.View key={index} style={[styles.dot, { opacity, transform: [{ scale }] }]} />;
+        })}
+      </View>
+      <Text style={styles.typingLabel}>Styling your moment...</Text>
     </View>
   );
 }
@@ -169,6 +178,9 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
   const navigation = useNavigation();
   const scrollRef = useRef<ScrollView | null>(null);
   const [input, setInput] = useState('');
+  const [inputFocused, setInputFocused] = useState(false);
+  const [selectedChip, setSelectedChip] = useState<string | null>(null);
+  const [headerPressed, setHeaderPressed] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [confettiVisible, setConfettiVisible] = useState(false);
@@ -365,12 +377,12 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
   };
 
   const renderError = (msg: ErrorMessage): React.JSX.Element => (
-    <View style={styles.advisorBubble}>
+    <View style={styles.errorBubble}>
       <View style={styles.errorHeader}>
         <Ionicons
           name={msg.errorType === 'offline' ? 'wifi' : msg.errorType === 'rate_limit' ? 'alert-circle' : 'sparkles'}
           size={16}
-          color={msg.errorType === 'offline' ? '#0369a1' : '#b45309'}
+          color="#e6c487"
         />
         <Text style={styles.errorText}>{msg.text}</Text>
       </View>
@@ -408,13 +420,29 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
     <View style={styles.screen}>
       <ConfettiOverlay visible={confettiVisible} />
 
-      <View style={styles.header}>
-        <View style={styles.headerRow}>
-          <Ionicons name="sparkles" size={20} color="#0f766e" />
-          <Text style={styles.title}>Style Advisor</Text>
+      <BlurView intensity={20} tint="dark" style={styles.header}>
+        <View style={styles.headerInner}>
+          <View style={styles.headerLeft}>
+            <View style={styles.avatarCircle}>
+              <Ionicons name="person" size={14} color="#e6c487" />
+            </View>
+            <Text style={styles.headerLeftText}>Advisor</Text>
+          </View>
+
+          <View style={styles.headerCenter}>
+            <Text style={styles.brandText}>FitMind</Text>
+            <MaterialIcons name="auto-awesome" size={18} color="#e6c487" style={styles.brandIcon} />
+          </View>
+
+          <Pressable
+            style={[styles.headerIconBtn, { transform: [{ scale: headerPressed ? 0.95 : 1 }] }]}
+            onPressIn={() => setHeaderPressed(true)}
+            onPressOut={() => setHeaderPressed(false)}
+          >
+            <MaterialIcons name="face" size={18} color="#d0c5b5" />
+          </Pressable>
         </View>
-        <Text style={styles.subtitle}>Describe any situation - I'll style you perfectly</Text>
-      </View>
+      </BlurView>
 
       <ScrollView
         ref={(r) => { scrollRef.current = r; }}
@@ -422,6 +450,13 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
         contentContainerStyle={styles.chatContent}
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
       >
+        <View style={styles.welcomeWrap}>
+          <Text style={styles.welcomeTitle}>Style Advisor</Text>
+          <Text style={styles.welcomeSubtitle}>
+            Describe your occasion, and I&apos;ll style you with confidence.
+          </Text>
+        </View>
+
         {messages.map((msg) => {
           if (msg.type === 'user') {
             return (
@@ -489,32 +524,45 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
       </ScrollView>
 
       <View style={styles.inputWrap}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-          {QUICK_CHIPS.map((chip) => (
-            <Pressable
-              key={chip.label}
-              style={styles.chip}
-              onPress={() => {
-                setInput(chip.prompt);
-                void sendPrompt(chip.prompt);
-              }}
-            >
-              <Text style={styles.chipText}>{chip.label}</Text>
-            </Pressable>
-          ))}
-        </ScrollView>
+        <LinearGradient colors={['#131313', 'rgba(19,19,19,0)']} start={{ x: 0, y: 1 }} end={{ x: 0, y: 0 }} style={styles.chipsGradient}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
+            {QUICK_CHIPS.map((chip) => {
+              const active = selectedChip === chip.label;
 
-        <View style={styles.inputRow}>
+              return (
+                <Pressable
+                  key={chip.label}
+                  style={[styles.chip, active ? styles.chipActive : null]}
+                  onPress={() => {
+                    setSelectedChip(chip.label);
+                    setInput(chip.prompt);
+                    void sendPrompt(chip.prompt);
+                  }}
+                >
+                  <Text style={[styles.chipText, active ? styles.chipTextActive : null]}>{chip.label}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </LinearGradient>
+
+        <View style={[styles.inputRow, inputFocused ? styles.inputRowFocused : null]}>
+          <View style={styles.inputIconWrap}>
+            <MaterialIcons name="auto-fix-high" size={16} color="#e6c487" />
+          </View>
           <TextInput
             value={input}
             onChangeText={setInput}
             placeholder="Describe your situation..."
+            placeholderTextColor="rgba(208,197,181,0.80)"
             style={styles.input}
             editable={!submitting}
+            onFocus={() => setInputFocused(true)}
+            onBlur={() => setInputFocused(false)}
             onSubmitEditing={() => { void sendPrompt(input); }}
           />
           <Pressable style={styles.sendBtn} disabled={submitting} onPress={() => { void sendPrompt(input); }}>
-            <Ionicons name="arrow-up" size={18} color="#ffffff" />
+            <MaterialIcons name="arrow-upward" size={18} color="#1f1f1f" />
           </Pressable>
         </View>
       </View>
@@ -523,41 +571,275 @@ export default function StyleAdvisorScreen(): React.JSX.Element {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#f8fafc' },
-  header: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8, backgroundColor: '#ffffff', borderBottomWidth: 1, borderColor: '#e2e8f0' },
-  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  title: { fontSize: 22, fontWeight: '900', color: '#0f172a' },
-  subtitle: { marginTop: 4, color: '#475569' },
+  screen: { flex: 1, backgroundColor: '#131313' },
+  header: {
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(230,196,135,0.20)',
+    backgroundColor: 'rgba(19,19,19,0.85)',
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 10,
+  },
+  headerInner: {
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 10,
+    minHeight: 72,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    width: 88,
+  },
+  avatarCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(230,196,135,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(230,196,135,0.20)',
+  },
+  headerLeftText: {
+    color: '#d0c5b5',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 11,
+    letterSpacing: 1.6,
+    textTransform: 'uppercase',
+  },
+  headerCenter: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  brandText: {
+    color: '#e6c487',
+    fontFamily: 'PlayfairDisplay_700Bold_Italic',
+    fontSize: 24,
+  },
+  brandIcon: {
+    position: 'absolute',
+    right: -20,
+    top: 6,
+  },
+  headerIconBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#353534',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   chat: { flex: 1 },
-  chatContent: { padding: 12, paddingBottom: 18 },
+  chatContent: { paddingHorizontal: 12, paddingTop: 14, paddingBottom: 16 },
+  welcomeWrap: { marginBottom: 16 },
+  welcomeTitle: {
+    color: '#e6c487',
+    fontFamily: 'PlayfairDisplay_700Bold',
+    fontSize: 24,
+    marginBottom: 4,
+  },
+  welcomeSubtitle: {
+    color: '#d0c5b5',
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    lineHeight: 21,
+  },
   userRow: { alignItems: 'flex-end', marginBottom: 10 },
-  userBubble: { maxWidth: '86%', backgroundColor: '#0f766e', borderRadius: 14, borderBottomRightRadius: 4, padding: 10 },
-  userText: { color: '#ffffff', fontWeight: '600' },
-  advisorBubble: { maxWidth: '95%', backgroundColor: '#ffffff', borderRadius: 14, borderBottomLeftRadius: 4, padding: 10, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 10 },
+  userBubble: {
+    maxWidth: '85%',
+    backgroundColor: '#2a2a2a',
+    borderRadius: 16,
+    borderBottomRightRadius: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  userText: {
+    color: '#f0ede9',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  advisorBubble: { marginBottom: 10 },
+  typingCard: {
+    backgroundColor: '#201f1f',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(230,196,135,0.20)',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   typingWrap: { flexDirection: 'row', gap: 6, alignItems: 'center', height: 18 },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#0f766e' },
-  thinkingText: { color: '#334155', fontWeight: '600' },
-  inputWrap: { paddingHorizontal: 12, paddingVertical: 10, borderTopWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#ffffff' },
+  dot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#e6c487' },
+  typingLabel: {
+    color: '#d0c5b5',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+  },
+  thinkingText: {
+    color: '#d0c5b5',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    lineHeight: 21,
+    backgroundColor: '#201f1f',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(230,196,135,0.20)',
+    padding: 14,
+  },
+  inputWrap: {
+    backgroundColor: '#131313',
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+  },
+  chipsGradient: {
+    marginTop: 2,
+    marginBottom: 8,
+    paddingTop: 4,
+  },
   chipsRow: { paddingBottom: 8, gap: 8, paddingRight: 8 },
-  chip: { backgroundColor: '#ecfeff', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7, borderWidth: 1, borderColor: '#99f6e4' },
-  chipText: { color: '#115e59', fontWeight: '700' },
-  inputRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  input: { flex: 1, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#f8fafc' },
-  sendBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#0f766e', alignItems: 'center', justifyContent: 'center' },
-  fallbackBanner: { borderWidth: 1, borderColor: '#fde68a', borderRadius: 10, backgroundColor: '#fffbeb', padding: 10, marginBottom: 8 },
-  fallbackText: { color: '#92400e', fontWeight: '600' },
-  noMatchBox: { borderWidth: 1, borderColor: '#f1f5f9', borderRadius: 12, backgroundColor: '#ffffff', padding: 10, marginBottom: 8 },
-  noMatchTitle: { color: '#0f172a', fontWeight: '700' },
-  closestText: { marginTop: 8, color: '#475569', fontWeight: '700' },
+  chip: {
+    backgroundColor: '#2a2a2a',
+    borderRadius: 9999,
+    borderWidth: 1,
+    borderColor: '#4d463a',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  chipActive: {
+    borderColor: '#e6c487',
+    backgroundColor: 'rgba(230,196,135,0.12)',
+  },
+  chipText: {
+    color: '#d0c5b5',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+  },
+  chipTextActive: {
+    color: '#f0ede9',
+  },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#2a2a2a',
+    borderRadius: 9999,
+    borderWidth: 1,
+    borderColor: '#4d463a',
+    paddingLeft: 8,
+    paddingRight: 4,
+    paddingVertical: 4,
+  },
+  inputRowFocused: {
+    borderColor: '#e6c487',
+  },
+  inputIconWrap: {
+    width: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  input: {
+    flex: 1,
+    color: '#f0ede9',
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    paddingVertical: 10,
+  },
+  sendBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#e6c487',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fallbackBanner: {
+    borderWidth: 1,
+    borderColor: 'rgba(230,196,135,0.20)',
+    borderRadius: 12,
+    backgroundColor: '#201f1f',
+    padding: 12,
+    marginBottom: 8,
+  },
+  fallbackText: {
+    color: '#d0c5b5',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  noMatchBox: {
+    borderWidth: 1,
+    borderColor: 'rgba(230,196,135,0.20)',
+    borderRadius: 12,
+    backgroundColor: '#201f1f',
+    padding: 12,
+    marginBottom: 8,
+  },
+  noMatchTitle: {
+    color: '#e5e2e1',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  closestText: {
+    marginTop: 8,
+    color: '#d0c5b5',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+  },
+  errorBubble: {
+    backgroundColor: '#201f1f',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(230,196,135,0.20)',
+    padding: 14,
+    marginBottom: 10,
+  },
   errorHeader: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
-  errorText: { color: '#334155', flex: 1, fontWeight: '600' },
-  retryBtn: { marginTop: 10, alignSelf: 'flex-start', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
-  retryText: { color: '#334155', fontWeight: '700' },
-  linkBtn: { marginTop: 10, alignSelf: 'flex-start', backgroundColor: '#ecfeff', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
-  linkBtnText: { color: '#0f766e', fontWeight: '700' },
+  errorText: {
+    color: '#e5e2e1',
+    flex: 1,
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  retryBtn: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: '#4d463a',
+    borderRadius: 9999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  retryText: { color: '#e5e2e1', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  linkBtn: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    backgroundColor: '#2a2a2a',
+    borderRadius: 9999,
+    borderWidth: 1,
+    borderColor: '#4d463a',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  linkBtnText: { color: '#e6c487', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
   emptyState: { marginTop: 8 },
-  emptyTitle: { fontWeight: '700', color: '#0f172a' },
-  emptySub: { marginTop: 4, color: '#475569' },
+  emptyTitle: { fontFamily: 'Inter_700Bold', color: '#e5e2e1', fontSize: 14 },
+  emptySub: { marginTop: 4, color: '#d0c5b5', fontFamily: 'Inter_400Regular', fontSize: 13 },
   confettiLayer: { ...StyleSheet.absoluteFillObject, zIndex: 50 },
   confetti: { position: 'absolute', top: -10, width: 8, height: 14, borderRadius: 2 },
 });

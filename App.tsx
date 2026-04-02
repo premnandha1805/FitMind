@@ -1,6 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Text, View, StyleSheet, AppState, AppStateStatus } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { useFonts } from 'expo-font';
+import * as SplashScreen from 'expo-splash-screen';
+import {
+  NotoSerif_400Regular,
+  NotoSerif_700Bold,
+  NotoSerif_400Regular_Italic,
+  NotoSerif_700Bold_Italic,
+} from '@expo-google-fonts/noto-serif';
+import {
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+} from '@expo-google-fonts/inter';
+import { PlayfairDisplay_700Bold_Italic } from '@expo-google-fonts/playfair-display';
 import NetInfo from '@react-native-community/netinfo';
 import AppNavigator from './src/navigation/AppNavigator';
 import { initializeDatabase } from './src/db/migrations';
@@ -12,13 +27,32 @@ import GeminiKeySetupScreen from './src/screens/GeminiKeySetupScreen';
 import { validateGeminiKey } from './src/services/gemini';
 import { retryQueuedFeedback } from './src/services/feedbackEngine';
 
-export default function App(): React.JSX.Element {
+void SplashScreen.preventAutoHideAsync();
+
+export default function App(): React.JSX.Element | null {
+  const [fontsLoaded] = useFonts({
+    NotoSerif_400Regular,
+    NotoSerif_700Bold,
+    NotoSerif_400Regular_Italic,
+    NotoSerif_700Bold_Italic,
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+    PlayfairDisplay_700Bold_Italic,
+  });
   const loadUser = useUserStore((s) => s.loadUser);
   const profile = useUserStore((s) => s.profile);
   const refreshTaste = useTasteStore((s) => s.refresh);
   const [ready, setReady] = useState(false);
   const [offline, setOffline] = useState(false);
   const [keyValid, setKeyValid] = useState(true);
+
+  useEffect(() => {
+    if (fontsLoaded) {
+      void SplashScreen.hideAsync();
+    }
+  }, [fontsLoaded]);
 
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener((state) => {
@@ -48,6 +82,10 @@ export default function App(): React.JSX.Element {
       appStateSub.remove();
     };
   }, [loadUser, refreshTaste]);
+
+  if (!fontsLoaded) {
+    return null;
+  }
 
   if (!ready) {
     return (

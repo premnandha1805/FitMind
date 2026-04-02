@@ -1,9 +1,9 @@
-import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import React, { useState } from 'react';
+import { Image, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { MaterialIcons } from '@expo/vector-icons';
 import { ClothingItem } from '../types/models';
 import { AdvisorResponse } from '../services/scenarioEngine';
-import { OutfitSuggestionCard } from './OutfitSuggestionCard';
 import { MissingItemCard } from './MissingItemCard';
 
 interface Props {
@@ -15,82 +15,94 @@ interface Props {
 }
 
 export function AdvisorMessage({ response, closetItems, onTryDifferent, onPerfect, isRefreshing = false }: Props): React.JSX.Element {
-  const outfitItems = response.outfit
-    ? closetItems.filter((item) => response.outfit?.itemIds.includes(item.id))
+  const { width } = useWindowDimensions();
+  const [tryHovered, setTryHovered] = useState(false);
+  const [perfectPressed, setPerfectPressed] = useState(false);
+
+  const selectedOutfit = response.outfit ?? response.closestOutfit;
+  const outfitItems = selectedOutfit
+    ? selectedOutfit.itemIds
+      .map((id) => closetItems.find((item) => item.id === id))
+      .filter((item): item is ClothingItem => Boolean(item))
     : [];
-  const closestItems = response.closestOutfit
-    ? closetItems.filter((item) => response.closestOutfit?.itemIds.includes(item.id))
-    : [];
+
+  const secondaryBadges = [
+    `${response.formality}/10`,
+    response.videoCallMode ? 'Video Call' : 'In Person',
+  ];
+
+  const advisorText = response.closestOutfit
+    ? 'I could not find an exact match in your closet, so I curated the closest look that still keeps your vibe polished.'
+    : 'I styled this look to align with your event context, your tone harmony, and the way you naturally prefer silhouettes.';
+
+  const stackButtons = width < 380;
 
   return (
     <View style={styles.card}>
-      <Text style={styles.sectionTitle}>Situation understood</Text>
-      <View style={styles.badgesRow}>
-        <View style={styles.badge}><Text style={styles.badgeText}>{response.eventType}</Text></View>
-        <View style={styles.badge}><Text style={styles.badgeText}>Formality {response.formality}/10</Text></View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.badgesRow}>
+        <View style={styles.badgePrimary}><Text style={styles.badgePrimaryText}>{response.eventType}</Text></View>
+        {secondaryBadges.map((badge) => (
+          <View key={badge} style={styles.badgeSecondary}><Text style={styles.badgeSecondaryText}>{badge}</Text></View>
+        ))}
+      </ScrollView>
+
+      <Text style={styles.advisorText}>{advisorText}</Text>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.clothingStrip}>
+        {outfitItems.map((item) => (
+          <View key={item.id} style={styles.itemCard}>
+            <Image source={{ uri: item.imagePath }} resizeMode="cover" style={styles.itemImage} />
+            <View style={styles.itemLabelWrap}>
+              <Text style={styles.itemLabel}>{item.category.toUpperCase()}</Text>
+            </View>
+          </View>
+        ))}
+      </ScrollView>
+
+      <Text style={styles.whyLabel}>WHY THIS WORKS</Text>
+      <View style={styles.whyList}>
+        {response.explanation.map((line) => (
+          <View key={line} style={styles.lineRow}>
+            <MaterialIcons name="check-circle" size={16} color="#e6c487" />
+            <Text style={styles.lineText}>{line}</Text>
+          </View>
+        ))}
       </View>
 
-      <Text style={styles.sectionTitle}>Outfit suggestion</Text>
-      {response.outfit ? (
-        <OutfitSuggestionCard
-          outfit={response.outfit}
-          items={outfitItems}
-          videoCallMode={response.videoCallMode}
-          overallScore={response.allScores?.overall ?? null}
-        />
-      ) : response.closestOutfit ? (
-        <OutfitSuggestionCard
-          outfit={response.closestOutfit}
-          items={closestItems}
-          videoCallMode={response.videoCallMode}
-          overallScore={null}
-        />
-      ) : null}
-
-      <Text style={styles.sectionTitle}>Why this works</Text>
-      {response.explanation.map((line) => (
-        <View key={line} style={styles.lineRow}>
-          <Ionicons name="checkmark-circle" size={16} color="#0f766e" />
-          <Text style={styles.lineText}>{line}</Text>
-        </View>
-      ))}
-
-      <Text style={styles.sectionTitle}>Confidence tip</Text>
       <View style={styles.tipBox}>
-        <Ionicons name="bulb" size={16} color="#a16207" />
+        <View style={styles.tipHeader}>
+          <MaterialIcons name="lightbulb" size={14} color="#e6c487" />
+          <Text style={styles.tipHeaderText}>Confidence Tip</Text>
+        </View>
         <Text style={styles.tipText}>{response.confidenceTip}</Text>
       </View>
 
       {response.missingItems.length > 0 ? (
         <>
-          <Text style={styles.sectionTitle}>Missing items</Text>
           {response.missingItems.map((item) => <MissingItemCard key={item} item={item} />)}
         </>
       ) : null}
 
-      {response.videoCallMode ? (
-        <>
-          <Text style={styles.sectionTitle}>Video call tips</Text>
-          <View style={styles.videoTipsBox}>
-            <View style={styles.lineRow}>
-              <Ionicons name="videocam" size={16} color="#0f766e" />
-              <Text style={styles.lineText}>Video call tip: camera sees only your upper body. Focus on top and accessories for maximum impact.</Text>
-            </View>
-            <View style={styles.lineRow}>
-              <Ionicons name="color-palette" size={16} color="#0f766e" />
-              <Text style={styles.lineText}>Avoid white (overexposes) and red (bleeds on camera). Navy, teal and earth tones work best on video.</Text>
-            </View>
-          </View>
-        </>
-      ) : null}
-
-      <View style={styles.actions}>
-        <Pressable style={styles.secondaryBtn} onPress={onTryDifferent} disabled={isRefreshing}>
-          <Text style={styles.secondaryText}>{isRefreshing ? 'Loading...' : 'Try a Different Look'}</Text>
+      <View style={[styles.actions, stackButtons ? styles.actionsStack : null]}>
+        <Pressable
+          style={[styles.secondaryBtn, tryHovered ? styles.secondaryBtnHover : null]}
+          onPress={onTryDifferent}
+          disabled={isRefreshing}
+          onHoverIn={() => setTryHovered(true)}
+          onHoverOut={() => setTryHovered(false)}
+        >
+          <Text style={styles.secondaryText}>{isRefreshing ? 'Loading...' : 'Try Different Look'}</Text>
         </Pressable>
-        <Pressable style={styles.primaryBtn} onPress={onPerfect}>
-          <Text style={styles.primaryText}>This is Perfect</Text>
-          <Ionicons name="checkmark" size={14} color="#ffffff" />
+
+        <Pressable
+          onPress={onPerfect}
+          onPressIn={() => setPerfectPressed(true)}
+          onPressOut={() => setPerfectPressed(false)}
+          style={{ transform: [{ scale: perfectPressed ? 0.95 : 1 }], flex: 1 }}
+        >
+          <LinearGradient colors={['#e6c487', '#c9a96e']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.primaryBtn}>
+            <Text style={styles.primaryText}>This is Perfect</Text>
+          </LinearGradient>
         </Pressable>
       </View>
     </View>
@@ -99,98 +111,180 @@ export function AdvisorMessage({ response, closetItems, onTryDifferent, onPerfec
 
 const styles = StyleSheet.create({
   card: {
+    backgroundColor: '#201f1f',
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 14,
-    padding: 12,
-    backgroundColor: '#ffffff',
+    borderColor: 'rgba(230,196,135,0.20)',
+    padding: 20,
     marginBottom: 10,
-  },
-  sectionTitle: {
-    marginTop: 6,
-    marginBottom: 6,
-    fontWeight: '800',
-    color: '#0f172a',
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 8,
   },
   badgesRow: {
     flexDirection: 'row',
     gap: 8,
-    flexWrap: 'wrap',
-    marginBottom: 6,
+    marginBottom: 16,
   },
-  badge: {
-    backgroundColor: '#eef2ff',
-    borderRadius: 999,
-    paddingHorizontal: 10,
+  badgePrimary: {
+    backgroundColor: 'rgba(230,196,135,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(230,196,135,0.20)',
+    borderRadius: 9999,
+    paddingHorizontal: 12,
     paddingVertical: 4,
   },
-  badgeText: {
-    color: '#3730a3',
-    fontWeight: '700',
-    fontSize: 12,
+  badgePrimaryText: {
+    color: '#e6c487',
+    fontFamily: 'Inter_700Bold',
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 1.8,
+  },
+  badgeSecondary: {
+    backgroundColor: '#353534',
+    borderRadius: 9999,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+  },
+  badgeSecondaryText: {
+    color: '#d0c5b5',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 1.8,
+  },
+  advisorText: {
+    color: '#e5e2e1',
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    lineHeight: 22,
+    marginBottom: 20,
+  },
+  clothingStrip: {
+    gap: 12,
+    paddingVertical: 4,
+    marginBottom: 20,
+  },
+  itemCard: {
+    minWidth: 120,
+    aspectRatio: 3 / 4,
+    borderRadius: 12,
+    backgroundColor: '#1c1b1b',
+    overflow: 'hidden',
+  },
+  itemImage: {
+    width: '100%',
+    height: '100%',
+  },
+  itemLabelWrap: {
+    position: 'absolute',
+    left: 8,
+    bottom: 8,
+    backgroundColor: 'rgba(0,0,0,0.60)',
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+    borderRadius: 4,
+  },
+  itemLabel: {
+    color: '#ffffff',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 10,
+  },
+  whyLabel: {
+    color: '#e6c487',
+    fontFamily: 'Inter_700Bold',
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 1.8,
+    marginBottom: 12,
+  },
+  whyList: {
+    gap: 10,
+    marginBottom: 20,
   },
   lineRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 8,
-    marginBottom: 4,
+    gap: 12,
   },
   lineText: {
-    color: '#334155',
+    color: '#d0c5b5',
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    lineHeight: 21,
     flex: 1,
   },
   tipBox: {
+    backgroundColor: 'rgba(230,196,135,0.10)',
+    borderLeftWidth: 4,
+    borderLeftColor: '#e6c487',
+    borderTopRightRadius: 8,
+    borderBottomRightRadius: 8,
+    padding: 16,
+    marginBottom: 24,
+  },
+  tipHeader: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 8,
-    borderWidth: 1,
-    borderColor: '#fde68a',
-    borderRadius: 10,
-    backgroundColor: '#fffbeb',
-    padding: 10,
+    marginBottom: 10,
+  },
+  tipHeaderText: {
+    color: '#e6c487',
+    fontFamily: 'Inter_700Bold',
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 1.2,
   },
   tipText: {
-    flex: 1,
-    color: '#92400e',
-    fontWeight: '600',
-  },
-  videoTipsBox: {
-    borderWidth: 1,
-    borderColor: '#99f6e4',
-    borderRadius: 10,
-    backgroundColor: '#f0fdfa',
-    padding: 10,
+    color: '#e5e2e1',
+    fontFamily: 'Inter_400Regular',
+    fontStyle: 'italic',
+    fontSize: 14,
+    lineHeight: 21,
   },
   actions: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     gap: 8,
-    marginTop: 12,
+  },
+  actionsStack: {
+    flexDirection: 'column',
   },
   secondaryBtn: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 10,
-    paddingVertical: 10,
+    borderColor: '#4d463a',
+    borderRadius: 9999,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
     alignItems: 'center',
+    justifyContent: 'center',
   },
+  secondaryBtnHover: { backgroundColor: '#2a2a2a' },
   secondaryText: {
-    color: '#334155',
-    fontWeight: '700',
+    color: '#e5e2e1',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
   },
   primaryBtn: {
     flex: 1,
-    backgroundColor: '#0f766e',
-    borderRadius: 10,
-    paddingVertical: 10,
+    borderRadius: 9999,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
     alignItems: 'center',
     justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 4,
+    shadowColor: '#e6c487',
+    shadowOpacity: 0.28,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
   },
   primaryText: {
-    color: '#ffffff',
-    fontWeight: '700',
+    color: '#261900',
+    fontFamily: 'Inter_700Bold',
+    fontSize: 14,
   },
 });

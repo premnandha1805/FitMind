@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Pressable, StyleSheet, ScrollView, Animated, Image } from 'react-native';
+import { View, Text, Pressable, StyleSheet, ScrollView, Animated } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { FitReport } from '../components/FitReport';
 import { runFitCheck } from '../services/gemini';
@@ -172,77 +172,30 @@ export default function FitCheckScreen(): React.JSX.Element {
 
       {report ? (
         <>
-          <FitReport report={report} onSwapUse={() => {}} onSwapReject={(itemType) => { safeAsync(async () => recordSwapRequest('fitcheck', itemType, 'Not for me'), 'FitCheckScreen.swapRejectInline'); }} />
-          <Text style={styles.swapHeader}>Swap Suggestions</Text>
-          {report.swap_suggestions.map((swap, idx) => {
-            const img = resolveSwapImage(swap.item_type);
-            return (
-              <View key={`${swap.item_type}-${swap.color}-${idx}`} style={styles.swapCard}>
-                {img ? (
-                  <Image source={{ uri: img }} style={styles.swapImage} />
-                ) : (
-                  <View style={[styles.swapImage, styles.swapPlaceholder]}>
-                    <Text style={styles.swapPlaceholderText}>No closet match</Text>
-                  </View>
-                )}
-                <View style={styles.swapBody}>
-                  <Text style={styles.swapTitle}>{swap.item_type}</Text>
-                  <Text style={styles.swapReason}>{swap.reason}</Text>
-                  <Text style={styles.swapColor}>Suggested color: {swap.color}</Text>
-                  <View style={styles.swapActions}>
-                    <Pressable style={styles.swapBtn} onPress={() => {}}>
-                      <Text>Use This Swap</Text>
-                    </Pressable>
-                    <Pressable
-                      style={styles.swapBtn}
-                      onPress={() => {
-                        safeAsync(async () => recordSwapRequest('fitcheck', swap.item_type, 'Not for me'), 'FitCheckScreen.swapRejectCard');
-                      }}
-                    >
-                      <Text>Not for me</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              </View>
-            );
-          })}
+          <FitReport
+            report={report}
+            onSwapUse={(itemType) => {
+              safeAsync(async () => recordSwapRequest('fitcheck', itemType, 'Use This Swap'), 'FitCheckScreen.swapUse');
+            }}
+            onSwapReject={(itemType) => {
+              safeAsync(async () => recordSwapRequest('fitcheck', itemType, 'Not for me'), 'FitCheckScreen.swapRejectInline');
+            }}
+            onRate={onRate}
+            ratingCaptured={ratingCaptured}
+            swapImageUri={report.swap_suggestions[0] ? resolveSwapImage(report.swap_suggestions[0].item_type) : null}
+          />
         </>
-      ) : null}
-
-      {report && !ratingCaptured ? (
-        <View style={styles.rating}>
-          <Text>Did this match how you felt?</Text>
-          <View style={styles.row}>
-            <Pressable style={styles.pill} onPress={() => onRate('loved')}><Text>😍 Loved it</Text></Pressable>
-            <Pressable style={styles.pill} onPress={() => onRate('fine')}><Text>👍 It was fine</Text></Pressable>
-            <Pressable style={styles.pill} onPress={() => onRate('notGreat')}><Text>😐 Not great</Text></Pressable>
-          </View>
-        </View>
       ) : null}
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 16, backgroundColor: '#fff' },
-  counter: { fontWeight: '700' },
-  btn: { marginTop: 10, backgroundColor: '#0f766e', padding: 12, borderRadius: 12, alignItems: 'center' },
-  btnText: { color: '#fff', fontWeight: '700' },
-  pulseCard: { marginTop: 12, borderRadius: 12, backgroundColor: '#e0f2fe', padding: 14 },
-  loading: { color: '#0369a1', fontWeight: '800', fontSize: 16 },
-  loadingSub: { marginTop: 4, color: '#075985' },
-  swapHeader: { marginTop: 14, fontWeight: '800', color: '#0f172a' },
-  swapCard: { marginTop: 8, flexDirection: 'row', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 12, overflow: 'hidden' },
-  swapImage: { width: 88, height: 88, backgroundColor: '#e5e7eb' },
-  swapPlaceholder: { alignItems: 'center', justifyContent: 'center' },
-  swapPlaceholderText: { color: '#64748b', fontSize: 11, textAlign: 'center', paddingHorizontal: 4 },
-  swapBody: { flex: 1, padding: 10 },
-  swapTitle: { fontWeight: '800', textTransform: 'capitalize' },
-  swapReason: { marginTop: 2, color: '#334155' },
-  swapColor: { marginTop: 2, color: '#0f766e', fontWeight: '600' },
-  swapActions: { flexDirection: 'row', gap: 8, marginTop: 8 },
-  swapBtn: { backgroundColor: '#e2e8f0', borderRadius: 999, paddingVertical: 6, paddingHorizontal: 10 },
-  rating: { marginTop: 12 },
-  row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
-  pill: { backgroundColor: '#e2e8f0', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7 },
+  container: { padding: 16, backgroundColor: '#131313', paddingBottom: 30 },
+  counter: { color: '#d0c5b5', fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  btn: { marginTop: 10, backgroundColor: '#2a2a2a', padding: 12, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#4d463a' },
+  btnText: { color: '#e6c487', fontFamily: 'Inter_700Bold', fontSize: 14 },
+  pulseCard: { marginTop: 12, borderRadius: 12, backgroundColor: '#201f1f', padding: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
+  loading: { color: '#e6c487', fontFamily: 'Inter_700Bold', fontSize: 16 },
+  loadingSub: { marginTop: 4, color: '#d0c5b5', fontFamily: 'Inter_400Regular' },
 });

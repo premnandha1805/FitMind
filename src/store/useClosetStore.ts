@@ -7,11 +7,12 @@ import * as FileSystem from 'expo-file-system/legacy';
 interface ClosetState {
   items: ClothingItem[];
   loading: boolean;
-  filter: 'all' | 'top' | 'bottom' | 'shoes' | 'accessory';
+  filter: 'all' | 'top' | 'bottom' | 'shoes' | 'accessory' | 'outerwear';
   loadItems: () => Promise<void>;
   addItem: (item: ClothingItem) => Promise<void>;
   deleteItem: (id: string, imagePath?: string) => Promise<void>;
   updateItemImage: (id: string, nextImagePath: string) => Promise<void>;
+  updateItem: (id: string, patch: Partial<Omit<ClothingItem, 'id' | 'createdAt'>>) => Promise<void>;
   setFilter: (filter: ClosetState['filter']) => void;
 }
 
@@ -118,6 +119,40 @@ export const useClosetStore = create<ClosetState>((set, get) => ({
         items: get().items.map((item) => (item.id === id ? { ...item, imagePath: previousPath } : item)),
       });
       await safeAsync(async () => FileSystem.deleteAsync(nextImagePath, { idempotent: true }), 'Closet.rollbackImage');
+    }
+  },
+
+  updateItem: async (id, patch) => {
+    const current = get().items;
+    const target = current.find((item) => item.id === id);
+    if (!target) return;
+
+    const nextItem: ClothingItem = { ...target, ...patch };
+    set({ items: current.map((item) => (item.id === id ? nextItem : item)) });
+
+    const { error } = await safeAsync(async () => {
+      await executeSqlWithRetry(
+        `UPDATE clothing_items
+         SET image_path = ?, category = ?, color_hsl = ?, color_hex = ?, pattern = ?, style_type = ?, season = ?,
+             times_worn = ?, last_worn = ?
+         WHERE id = ?;`,
+        [
+          nextItem.imagePath,
+          nextItem.category,
+          nextItem.colorHsl,
+          nextItem.colorHex,
+          nextItem.pattern,
+          nextItem.styleType,
+          nextItem.season,
+          nextItem.timesWorn,
+          nextItem.lastWorn,
+          id,
+        ]
+      );
+    }, 'Closet.updateItem');
+
+    if (error) {
+      set({ items: current });
     }
   },
 

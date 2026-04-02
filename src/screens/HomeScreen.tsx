@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Pressable, ScrollView, Text, View, StyleSheet } from 'react-native';
-import { OutfitCard } from '../components/OutfitCard';
+import { Animated, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { MaterialIcons } from '@expo/vector-icons';
 import { useOutfitStore } from '../store/useOutfitStore';
 import { dismissMorningCheckIn, getPendingMorningCheckIn, recordFitCheckRating, recordLiked, recordRejected, recordSkipped, recordWorn } from '../services/feedbackEngine';
 import { safeAsync } from '../utils/safeAsync';
@@ -15,6 +16,10 @@ import { useUserStore } from '../store/useUserStore';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { Outfit } from '../types/models';
 
+function score(value: number): string {
+  return `${Math.round(value)}`;
+}
+
 export default function HomeScreen(): React.JSX.Element {
   const outfits = useOutfitStore((s) => s.outfits);
   const note = useOutfitStore((s) => s.note);
@@ -27,6 +32,8 @@ export default function HomeScreen(): React.JSX.Element {
   const userProfile = useUserStore((s) => s.profile);
 
   const [visibleOutfits, setVisibleOutfits] = useState<Outfit[]>([]);
+  const [activeOutfitId, setActiveOutfitId] = useState<string | null>(null);
+  const [wearPressed, setWearPressed] = useState(false);
   const [autoRegenerated, setAutoRegenerated] = useState(false);
   const [morningOutfitId, setMorningOutfitId] = useState<string | null>(null);
   const rejectAnimations = useRef<Record<string, Animated.Value>>({});
@@ -40,6 +47,7 @@ export default function HomeScreen(): React.JSX.Element {
 
   useEffect(() => {
     setVisibleOutfits(outfits);
+    setActiveOutfitId(outfits[0]?.id ?? null);
     setAutoRegenerated(false);
     outfits.forEach((outfit) => {
       if (!rejectAnimations.current[outfit.id]) {
@@ -80,6 +88,9 @@ export default function HomeScreen(): React.JSX.Element {
             await generate(occasion, closetItems, userProfile, tasteProfile);
           }, 'HomeScreen.autoRegenerateOutfits');
         }
+        if (!updated.find((outfit) => outfit.id === activeOutfitId)) {
+          setActiveOutfitId(updated[0]?.id ?? null);
+        }
         return updated;
       });
     });
@@ -102,106 +113,407 @@ export default function HomeScreen(): React.JSX.Element {
     setMorningOutfitId(null);
   };
 
+  const activeOutfit = visibleOutfits.find((outfit) => outfit.id === activeOutfitId) ?? visibleOutfits[0] ?? null;
+
+  const onWearActive = (): void => {
+    if (!activeOutfit) return;
+    safeAsync(async () => recordWorn(activeOutfit.id), 'HomeScreen.recordWorn');
+  };
+
+  const itemImageMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    closetItems.forEach((item) => {
+      map[item.id] = item.imagePath;
+    });
+    return map;
+  }, [closetItems]);
+
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Today&apos;s Smart Picks</Text>
-      {note ? <Text style={styles.note}>{note}</Text> : null}
+    <View style={styles.screen}>
+      <ScrollView contentContainerStyle={styles.container}>
+        <Text style={styles.title}>Today&apos;s Smart Picks</Text>
+        {note ? <Text style={styles.note}>{note}</Text> : null}
 
-      {errorKind === 'noTopsOrBottoms' ? (
-        <ErrorCard
-          icon="👕"
-          title="Add at least one top and one bottom to generate outfits"
-          description="Add core pieces in Closet first."
-          actionText="Go to Closet"
-          onAction={() => tabNavigation.navigate('Closet')}
-        />
-      ) : null}
+        {errorKind === 'noTopsOrBottoms' ? (
+          <ErrorCard
+            icon="👕"
+            title="Add at least one top and one bottom to generate outfits"
+            description="Add core pieces in Closet first."
+            actionText="Go to Closet"
+            onAction={() => tabNavigation.navigate('Closet')}
+          />
+        ) : null}
 
-      {errorKind === 'noMatches' ? (
-        <ErrorCard
-          icon="🧭"
-          title="No occasion outfits found"
-          description="Showing closest alternatives."
-          actionText="OK"
-          onAction={() => {}}
-        />
-      ) : null}
+        {errorKind === 'noMatches' ? (
+          <ErrorCard
+            icon="🧭"
+            title="No occasion outfits found"
+            description="Showing closest alternatives."
+            actionText="OK"
+            onAction={() => {}}
+          />
+        ) : null}
 
-      {errorKind === 'allBlocked' ? (
-        <ErrorCard
-          icon="🧠"
-          title="We are still learning your taste"
-          description="Add more feedback to improve suggestions."
-          actionText="OK"
-          onAction={() => {}}
-        />
-      ) : null}
+        {errorKind === 'allBlocked' ? (
+          <ErrorCard
+            icon="🧠"
+            title="We are still learning your taste"
+            description="Add more feedback to improve suggestions."
+            actionText="OK"
+            onAction={() => {}}
+          />
+        ) : null}
 
-      {morningOutfitId ? (
-        <View style={styles.morningCard}>
-          <Text style={styles.morningTitle}>How did this outfit feel yesterday?</Text>
-          <View style={styles.morningRow}>
-            <Pressable style={styles.morningBtn} onPress={() => onMorningRate('loved')}><Text>😍 Loved it</Text></Pressable>
-            <Pressable style={styles.morningBtn} onPress={() => onMorningRate('fine')}><Text>👍 It was fine</Text></Pressable>
-            <Pressable style={styles.morningBtn} onPress={() => onMorningRate('notGreat')}><Text>😐 Not great</Text></Pressable>
+        {morningOutfitId ? (
+          <View style={styles.morningCard}>
+            <Text style={styles.morningTitle}>How did this outfit feel yesterday?</Text>
+            <View style={styles.morningRow}>
+              <Pressable style={styles.morningBtn} onPress={() => onMorningRate('loved')}><Text>😍 Loved it</Text></Pressable>
+              <Pressable style={styles.morningBtn} onPress={() => onMorningRate('fine')}><Text>👍 It was fine</Text></Pressable>
+              <Pressable style={styles.morningBtn} onPress={() => onMorningRate('notGreat')}><Text>😐 Not great</Text></Pressable>
+            </View>
+            <Pressable onPress={onMorningDismiss}>
+              <Text style={styles.dismiss}>Dismiss</Text>
+            </Pressable>
           </View>
-          <Pressable onPress={onMorningDismiss}>
-            <Text style={styles.dismiss}>Dismiss</Text>
-          </Pressable>
-        </View>
-      ) : null}
+        ) : null}
 
-      {loading ? (
-        <>
-          <SkeletonCard />
-          <SkeletonCard />
-          <SkeletonCard />
-        </>
-      ) : null}
+        {loading ? (
+          <>
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+          </>
+        ) : null}
 
-      {visibleOutfits.map((outfit) => {
-        const anim = rejectAnimations.current[outfit.id] ?? new Animated.Value(0);
-        rejectAnimations.current[outfit.id] = anim;
+        {visibleOutfits.map((outfit) => {
+          const anim = rejectAnimations.current[outfit.id] ?? new Animated.Value(0);
+          rejectAnimations.current[outfit.id] = anim;
+          const isActive = activeOutfit?.id === outfit.id;
+          const collageUris = outfit.itemIds.slice(0, 4).map((itemId) => itemImageMap[itemId] ?? null);
 
-        return (
-          <Animated.View
-            key={outfit.id}
-            style={{
-              transform: [{ translateX: anim.interpolate({ inputRange: [0, 1], outputRange: [0, 420] }) }],
-              opacity: anim.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }),
-            }}
-          >
-            <OutfitCard
-              outfit={outfit}
-              onWhy={() => navigation.navigate('WhyThisOutfit', { outfitId: outfit.id })}
-              onWear={() => { safeAsync(async () => recordWorn(outfit.id), 'HomeScreen.recordWorn'); }}
-              onLike={() => { safeAsync(async () => recordLiked(outfit.id), 'HomeScreen.recordLiked'); }}
-              onSkip={() => { safeAsync(async () => recordSkipped(outfit.id), 'HomeScreen.recordSkipped'); }}
-              onReject={() => handleReject(outfit.id)}
-            />
+          return (
+            <Animated.View
+              key={outfit.id}
+              style={{
+                transform: [
+                  { translateX: anim.interpolate({ inputRange: [0, 1], outputRange: [0, 420] }) },
+                  { scale: isActive ? 1 : 0.95 },
+                ],
+                opacity: anim.interpolate({ inputRange: [0, 1], outputRange: [isActive ? 1 : 0.8, 0] }),
+              }}
+            >
+              <Pressable onPress={() => setActiveOutfitId(outfit.id)} style={styles.outfitCard}>
+                <Text style={[styles.outfitName, !isActive ? styles.outfitNameSecondary : null]}>{outfit.name}</Text>
+
+                <View style={styles.collageGrid}>
+                  {Array.from({ length: 4 }).map((_, i) => {
+                    const uri = collageUris[i];
+                    return uri ? (
+                      <Image key={`${outfit.id}-${i}`} source={{ uri }} resizeMode="cover" style={styles.collageCell} />
+                    ) : (
+                      <View key={`${outfit.id}-${i}`} style={[styles.collageCell, styles.collageFallback]} />
+                    );
+                  })}
+                  {!isActive ? <View style={styles.collageGrayOverlay} /> : null}
+                </View>
+
+                <View style={styles.cardBottom}>
+                  <View style={styles.scoreRow}>
+                    <View
+                      style={[
+                        styles.scorePill,
+                        isActive ? styles.scoreColorPrimary : styles.scoreColorSecondary,
+                      ]}
+                    >
+                      <Text style={[styles.scoreText, isActive ? styles.scoreTextPrimaryDark : styles.scoreTextPrimaryDark]}>{isActive ? `COLOR ${score(outfit.colorScore)}` : `🎨 COLOR ${score(outfit.colorScore)}`}</Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.scorePill,
+                        isActive ? styles.scoreSkinPrimary : styles.scoreSkinSecondary,
+                      ]}
+                    >
+                      <Text style={[styles.scoreText, isActive ? styles.scoreTextSkinPrimary : styles.scoreTextSkinSecondary]}>{isActive ? `SKIN ${score(outfit.skinScore)}` : `🌿 SKIN ${score(outfit.skinScore)}`}</Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.scorePill,
+                        isActive ? styles.scoreAiPrimary : styles.scoreAiSecondary,
+                      ]}
+                    >
+                      <Text style={[styles.scoreText, isActive ? styles.scoreTextAiPrimary : styles.scoreTextAiSecondary]}>{isActive ? `AI ${score(outfit.geminiScore)}` : `✨ AI ${score(outfit.geminiScore)}`}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.feedbackRow}>
+                    <View style={styles.feedbackButtonsWrap}>
+                      <FeedbackButton
+                        icon="favorite"
+                        label="Like"
+                        active={isActive}
+                        onPress={() => { safeAsync(async () => recordLiked(outfit.id), 'HomeScreen.recordLiked'); }}
+                      />
+                      <FeedbackButton
+                        icon="skip-next"
+                        label="Skip"
+                        active={isActive}
+                        onPress={() => { safeAsync(async () => recordSkipped(outfit.id), 'HomeScreen.recordSkipped'); }}
+                      />
+                      <FeedbackButton
+                        icon="thumb-down"
+                        label="Not For Me"
+                        active={isActive}
+                        onPress={() => handleReject(outfit.id)}
+                      />
+                    </View>
+
+                    <WhyLink
+                      active={isActive}
+                      onPress={() => navigation.navigate('WhyThisOutfit', { outfitId: outfit.id })}
+                    />
+                  </View>
+                </View>
+              </Pressable>
+            </Animated.View>
+          );
+        })}
+
+        {!loading && outfits.length > 0 && visibleOutfits.length === 0 ? (
+          <View style={styles.box}><Text>All outfits skipped. Generating new ones...</Text></View>
+        ) : null}
+
+        {!loading && !visibleOutfits.length && !outfits.length ? (
+          <View style={styles.box}><Text>Generate outfits from Occasion Planner to start.</Text></View>
+        ) : null}
+      </ScrollView>
+
+      <View style={styles.wearBarWrap}>
+        <Pressable
+          onPress={onWearActive}
+          disabled={!activeOutfit}
+          onPressIn={() => setWearPressed(true)}
+          onPressOut={() => setWearPressed(false)}
+        >
+          <Animated.View style={{ transform: [{ scale: wearPressed ? 0.95 : activeOutfit ? 1 : 0.98 }], opacity: activeOutfit ? 1 : 0.45 }}>
+            <LinearGradient
+              colors={['#e6c487', '#c9a96e']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.wearGradientFallback}
+            >
+              <Text style={styles.wearBtnText}>Wear This Today</Text>
+            </LinearGradient>
           </Animated.View>
-        );
-      })}
+        </Pressable>
+      </View>
+    </View>
+  );
+}
 
-      {!loading && outfits.length > 0 && visibleOutfits.length === 0 ? (
-        <View style={styles.box}><Text>All outfits skipped. Generating new ones...</Text></View>
-      ) : null}
+function FeedbackButton({
+  icon,
+  label,
+  active,
+  onPress,
+}: {
+  icon: 'favorite' | 'skip-next' | 'thumb-down';
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}): React.JSX.Element {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <Pressable
+      onPress={onPress}
+      onHoverIn={() => setHovered(true)}
+      onHoverOut={() => setHovered(false)}
+      style={[
+        styles.feedbackBtn,
+        active ? styles.feedbackBtnActive : styles.feedbackBtnMuted,
+        hovered && active ? styles.feedbackBtnActiveHover : null,
+        hovered && !active ? styles.feedbackBtnMutedHover : null,
+      ]}
+    >
+      <MaterialIcons name={icon} size={16} color={active ? '#e6c487' : hovered ? '#e5e2e1' : 'rgba(208,197,181,0.70)'} />
+      <Text style={[styles.feedbackBtnLabel, active ? styles.feedbackBtnTextActive : hovered ? styles.feedbackBtnTextMutedHover : styles.feedbackBtnTextMuted]}>{label}</Text>
+    </Pressable>
+  );
+}
 
-      {!loading && !visibleOutfits.length && !outfits.length ? (
-        <View style={styles.box}><Text>Generate outfits from Occasion Planner to start.</Text></View>
-      ) : null}
-    </ScrollView>
+function WhyLink({ active, onPress }: { active: boolean; onPress: () => void }): React.JSX.Element {
+  const [hovered, setHovered] = useState(false);
+  const color = active ? '#e6c487' : hovered ? '#e5e2e1' : 'rgba(208,197,181,0.70)';
+  return (
+    <Pressable onPress={onPress} onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}>
+      <View style={styles.whyWrap}>
+        <Text style={[styles.whyText, { color, textDecorationLine: hovered ? 'underline' : 'none' }]}>Why This?</Text>
+        <MaterialIcons name="arrow-forward" size={14} color={color} />
+      </View>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 14, backgroundColor: '#f8fafc' },
-  title: { fontSize: 24, fontWeight: '900', color: '#0f172a', marginBottom: 8 },
-  note: { color: '#92400e', marginBottom: 8 },
-  box: { marginTop: 8, padding: 14, borderRadius: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0' },
+  screen: { flex: 1, backgroundColor: '#131313' },
+  container: { paddingHorizontal: 14, paddingBottom: 180, backgroundColor: '#131313' },
+  title: { fontSize: 24, fontWeight: '900', color: '#e5e2e1', marginBottom: 8 },
+  note: { color: '#d7c5a0', marginBottom: 8 },
+  box: { marginTop: 8, padding: 14, borderRadius: 12, backgroundColor: '#1f1f1f', borderWidth: 1, borderColor: '#2a2a2a' },
   morningCard: { marginBottom: 10, padding: 12, borderRadius: 12, backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#fed7aa' },
   morningTitle: { fontWeight: '800', color: '#7c2d12' },
   morningRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
   morningBtn: { backgroundColor: '#ffedd5', borderRadius: 999, paddingVertical: 6, paddingHorizontal: 10 },
   dismiss: { marginTop: 8, color: '#9a3412' },
+  outfitCard: {
+    marginBottom: 26,
+    backgroundColor: '#1b1b1b',
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  outfitName: {
+    paddingHorizontal: 24,
+    paddingTop: 24,
+    paddingBottom: 16,
+    color: '#e5e2e1',
+    fontFamily: 'NotoSerif_700Bold',
+    fontSize: 30,
+    letterSpacing: -0.4,
+  },
+  outfitNameSecondary: {
+    fontStyle: 'italic',
+    opacity: 0.5,
+  },
+  collageGrid: {
+    height: 400,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 2,
+    backgroundColor: '#353534',
+  },
+  collageCell: {
+    width: '49.6%',
+    height: '49.6%',
+    backgroundColor: '#353534',
+  },
+  collageFallback: {
+    backgroundColor: '#353534',
+  },
+  collageGrayOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(90,90,90,0.2)',
+  },
+  cardBottom: {
+    paddingHorizontal: 24,
+    paddingTop: 0,
+    paddingBottom: 24,
+  },
+  scoreRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 24,
+  },
+  scorePill: {
+    borderWidth: 1,
+    borderRadius: 9999,
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+  },
+  scoreColorPrimary: { backgroundColor: '#e6c487', borderColor: 'rgba(230,196,135,0.20)' },
+  scoreSkinPrimary: { backgroundColor: '#d7c5a0', borderColor: 'rgba(215,197,160,0.20)' },
+  scoreAiPrimary: { backgroundColor: '#9dadd5', borderColor: 'rgba(184,200,242,0.20)' },
+  scoreColorSecondary: { backgroundColor: '#e6c487', borderColor: 'rgba(230,196,135,0.20)' },
+  scoreSkinSecondary: { backgroundColor: '#4db6ac', borderColor: 'rgba(77,182,172,0.20)' },
+  scoreAiSecondary: { backgroundColor: '#b39ddb', borderColor: 'rgba(179,157,219,0.20)' },
+  scoreText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 1.5,
+  },
+  scoreTextPrimaryDark: { color: '#261900' },
+  scoreTextSkinPrimary: { color: '#241a04' },
+  scoreTextAiPrimary: { color: '#314163' },
+  scoreTextSkinSecondary: { color: '#00201d' },
+  scoreTextAiSecondary: { color: '#1a0033' },
+  feedbackRow: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.10)',
+    paddingTop: 16,
+    marginTop: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+  feedbackButtonsWrap: {
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+    flex: 1,
+  },
+  feedbackBtn: {
+    flexDirection: 'row',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 9999,
+    alignItems: 'center',
+  },
+  feedbackBtnActive: {
+    borderWidth: 1,
+    borderColor: 'rgba(230,196,135,0.20)',
+  },
+  feedbackBtnMuted: {
+    backgroundColor: '#2a2a2a',
+  },
+  feedbackBtnMutedHover: {
+    backgroundColor: '#2a2a2a',
+  },
+  feedbackBtnActiveHover: {
+    backgroundColor: 'rgba(230,196,135,0.10)',
+  },
+  feedbackBtnLabel: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+  },
+  feedbackBtnTextActive: { color: '#e6c487' },
+  feedbackBtnTextMuted: { color: 'rgba(208,197,181,0.70)' },
+  feedbackBtnTextMutedHover: { color: '#e5e2e1' },
+  whyWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  whyText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+  },
+  wearBarWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 96,
+    paddingHorizontal: 24,
+  },
+  wearGradientFallback: {
+    height: 56,
+    borderRadius: 9999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#d9b97f',
+    shadowColor: '#e6c487',
+    shadowOpacity: 0.4,
+    shadowRadius: 30,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 10,
+  },
+  wearBtnText: {
+    color: '#261900',
+    fontFamily: 'Inter_700Bold',
+    textTransform: 'uppercase',
+    letterSpacing: 1.6,
+    fontSize: 14,
+  },
 });

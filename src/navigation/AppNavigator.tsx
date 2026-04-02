@@ -74,8 +74,8 @@ export default function AppNavigator(): React.JSX.Element {
         {!onboarded ? (
           <>
             <Stack.Screen name="Onboarding" component={OnboardingScreen} options={{ headerShown: false }} />
-            <Stack.Screen name="SkinTone" component={SkinToneScreen} options={{ title: 'Skin Tone' }} />
-            <Stack.Screen name="StylePreferences" component={StylePreferencesScreen} options={{ title: 'Style Preferences' }} />
+            <Stack.Screen name="SkinTone" component={SkinToneScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="StylePreferences" component={StylePreferencesScreen} options={{ headerShown: false }} />
             <Stack.Screen name="ClosetIntro" component={ClosetIntroScreen} options={{ title: 'Closet Setup' }} />
             <Stack.Screen name="AddItem" component={AddItemScreen} options={{ title: 'Add Item' }} />
             <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} />
@@ -84,7 +84,7 @@ export default function AppNavigator(): React.JSX.Element {
         ) : (
           <>
             <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} />
-            <Stack.Screen name="SkinTone" component={SkinToneScreen} options={{ title: 'Skin Tone' }} />
+            <Stack.Screen name="SkinTone" component={SkinToneScreen} options={{ headerShown: false }} />
             <Stack.Screen name="AddItem" component={AddItemScreen} options={{ title: 'Add Item' }} />
             <Stack.Screen name="WhyThisOutfit" component={WhyThisOutfitScreen} options={{ title: 'Why This Outfit' }} />
           </>
