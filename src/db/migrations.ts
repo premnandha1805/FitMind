@@ -17,11 +17,85 @@ async function migrateClothingItemsToStrictV2(): Promise<void> {
     return;
   }
 
-  const queries = [
-    { sql: 'ALTER TABLE clothing_items RENAME TO clothing_items_legacy;', params: [] },
-    { sql: TABLE_SQL.clothingItems, params: [] },
-    {
-      sql: `INSERT INTO clothing_items (
+  const columnsResult = await safeAsync(
+    async () => db.getAllSync<{ name: string }>("PRAGMA table_info('clothing_items');"),
+    'Db.readClothingItemsColumns'
+  );
+  const existingColumns = new Set((columnsResult.data ?? []).map((c) => c.name));
+
+  const v2Columns = [
+    'id',
+    'image_path',
+    'category',
+    'subcategory',
+    'color_hsl',
+    'color_hex',
+    'color_family',
+    'pattern',
+    'style_type',
+    'fit_type',
+    'season',
+    'user_corrected',
+    'ai_confidence',
+    'ai_raw_label',
+    'times_worn',
+    'last_worn',
+    'created_at'
+  ];
+
+  const isAlreadyV2Compatible = v2Columns.every((col) => existingColumns.has(col));
+  if (isAlreadyV2Compatible) {
+    return;
+  }
+
+  const hasColumn = (name: string) => existingColumns.has(name);
+  const categoryExpr = hasColumn('category')
+    ? `CASE
+          WHEN lower(trim(category)) = 'top' THEN 'top'
+          WHEN lower(trim(category)) = 'bottom' THEN 'bottom'
+          WHEN lower(trim(category)) = 'shoes' THEN 'shoes'
+          WHEN lower(trim(category)) = 'accessory' THEN 'accessory'
+          WHEN lower(trim(category)) = 'outerwear' THEN 'outerwear'
+          ELSE 'top'
+        END`
+    : `'top'`;
+  const subcategoryExpr = hasColumn('subcategory')
+    ? `COALESCE(NULLIF(trim(subcategory), ''), 'general')`
+    : `'general'`;
+  const colorHslExpr = hasColumn('color_hsl')
+    ? `COALESCE(NULLIF(trim(color_hsl), ''), 'hsl(0,0%,50%)')`
+    : `'hsl(0,0%,50%)'`;
+  const colorHexExpr = hasColumn('color_hex')
+    ? `COALESCE(NULLIF(trim(color_hex), ''), '#808080')`
+    : `'#808080'`;
+  const patternExpr = hasColumn('pattern')
+    ? `CASE
+          WHEN lower(trim(pattern)) IN ('solid','stripes','checks','floral','print','geometric','abstract','other') THEN lower(trim(pattern))
+          ELSE 'solid'
+        END`
+    : `'solid'`;
+  const styleTypeExpr = hasColumn('style_type')
+    ? `CASE
+          WHEN lower(trim(style_type)) IN ('casual','formal','party','ethnic','professional','sports','smart_casual') THEN lower(trim(style_type))
+          WHEN lower(trim(style_type)) = 'business' THEN 'professional'
+          WHEN lower(trim(style_type)) = 'work' THEN 'professional'
+          ELSE 'casual'
+        END`
+    : `'casual'`;
+  const seasonExpr = hasColumn('season')
+    ? `CASE
+          WHEN lower(trim(season)) IN ('summer','winter','spring','autumn','all-season') THEN lower(trim(season))
+          ELSE 'all-season'
+        END`
+    : `'all-season'`;
+  const userCorrectedExpr = hasColumn('user_corrected') ? 'COALESCE(user_corrected, 0)' : '0';
+  const aiConfidenceExpr = hasColumn('ai_confidence') ? 'COALESCE(ai_confidence, 0.0)' : '0.0';
+  const aiRawLabelExpr = hasColumn('ai_raw_label') ? `COALESCE(ai_raw_label, '')` : `''`;
+  const timesWornExpr = hasColumn('times_worn') ? 'COALESCE(times_worn, 0)' : '0';
+  const lastWornExpr = hasColumn('last_worn') ? 'last_worn' : 'NULL';
+  const createdAtExpr = hasColumn('created_at') ? `COALESCE(created_at, datetime('now'))` : `datetime('now')`;
+
+  const insertLegacySql = `INSERT INTO clothing_items (
         id, image_path, category, subcategory, color_hsl, color_hex, color_family,
         pattern, style_type, fit_type, season, user_corrected, ai_confidence, ai_raw_label,
         times_worn, last_worn, created_at
@@ -29,42 +103,27 @@ async function migrateClothingItemsToStrictV2(): Promise<void> {
       SELECT
         id,
         image_path,
-        CASE
-          WHEN lower(trim(category)) = 'top' THEN 'top'
-          WHEN lower(trim(category)) = 'bottom' THEN 'bottom'
-          WHEN lower(trim(category)) = 'shoes' THEN 'shoes'
-          WHEN lower(trim(category)) = 'accessory' THEN 'accessory'
-          WHEN lower(trim(category)) = 'outerwear' THEN 'outerwear'
-          ELSE 'top'
-        END,
-        COALESCE(NULLIF(trim(subcategory), ''), 'general'),
-        COALESCE(NULLIF(trim(color_hsl), ''), 'hsl(0,0%,50%)'),
-        COALESCE(NULLIF(trim(color_hex), ''), '#808080'),
+        ${categoryExpr},
+        ${subcategoryExpr},
+        ${colorHslExpr},
+        ${colorHexExpr},
         'neutral',
-        CASE
-          WHEN lower(trim(pattern)) IN ('solid','stripes','checks','floral','print','geometric','abstract','other') THEN lower(trim(pattern))
-          ELSE 'solid'
-        END,
-        CASE
-          WHEN lower(trim(style_type)) IN ('casual','formal','party','ethnic','professional','sports','smart_casual') THEN lower(trim(style_type))
-          WHEN lower(trim(style_type)) = 'business' THEN 'professional'
-          WHEN lower(trim(style_type)) = 'work' THEN 'professional'
-          ELSE 'casual'
-        END,
+        ${patternExpr},
+        ${styleTypeExpr},
         'regular',
-        CASE
-          WHEN lower(trim(season)) IN ('summer','winter','spring','autumn','all-season') THEN lower(trim(season))
-          ELSE 'all-season'
-        END,
-        0,
-        0.0,
-        '',
-        COALESCE(times_worn, 0),
-        last_worn,
-        COALESCE(created_at, datetime('now'))
-      FROM clothing_items_legacy;`,
-      params: []
-    },
+        ${seasonExpr},
+        ${userCorrectedExpr},
+        ${aiConfidenceExpr},
+        ${aiRawLabelExpr},
+        ${timesWornExpr},
+        ${lastWornExpr},
+        ${createdAtExpr}
+      FROM clothing_items_legacy;`;
+
+  const queries = [
+    { sql: 'ALTER TABLE clothing_items RENAME TO clothing_items_legacy;', params: [] },
+    { sql: TABLE_SQL.clothingItems, params: [] },
+    { sql: insertLegacySql, params: [] },
     { sql: 'DROP TABLE clothing_items_legacy;', params: [] }
   ];
 
@@ -93,10 +152,9 @@ export async function initializeDatabase(): Promise<void> {
     await executeSqlWithRetry(TABLE_SQL.tasteProfile);
     await executeSqlWithRetry(TABLE_SQL.explicitPreferences);
     await executeSqlWithRetry(TABLE_SQL.blockedPatterns);
-    await executeSqlWithRetry('PRAGMA user_version = 2;');
   }
 
-  if (currentVersion >= 1 && currentVersion < 2) {
+  if (currentVersion < 2) {
     await migrateClothingItemsToStrictV2();
     await executeSqlWithRetry('PRAGMA user_version = 2;');
   }
