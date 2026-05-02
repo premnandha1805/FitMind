@@ -140,7 +140,8 @@ function filterForOccasion(items: ClothingItem[], occasion: string): FilteredClo
   let tops = items.filter((i) => i.category === 'top' && targetStyles.includes(i.styleType));
   let bottoms = items.filter((i) => i.category === 'bottom' && targetStyles.includes(i.styleType));
 
-  if (tops.length < 2 || bottoms.length < 2) {
+  if (tops.length < 1 || bottoms.length < 1) {
+    console.log('[Outfit] Relaxing style filter - using all items');
     tops = items.filter((i) => i.category === 'top');
     bottoms = items.filter((i) => i.category === 'bottom');
   }
@@ -151,6 +152,8 @@ function filterForOccasion(items: ClothingItem[], occasion: string): FilteredClo
 
   const shoes = items.filter((i) => i.category === 'shoes');
   const accessories = items.filter((i) => i.category === 'accessory');
+
+  console.log(`[Outfit] Filter result: ${tops.length} tops, ${bottoms.length} bottoms for occasion: ${occasion}`);
 
   return { tops, bottoms, shoes, accessories };
 }
@@ -640,13 +643,75 @@ export async function generateOutfits(
         tasteScore,
         skinScore,
         finalScore,
+        geminiScore: 7,
       };
     })
     .sort((a, b) => b.finalScore - a.finalScore);
 
+  const topCandidates = ranked.slice(0, 6).map((entry) => entry.candidate);
+  if (topCandidates.length) {
+    const geminiKey = `outfit-gemini-${userProfile.skinToneId}-${userProfile.skinUndertone}-${topCandidates
+      .map((candidate) => [candidate.top.id, candidate.bottom.id, candidate.shoes?.id, candidate.accessory?.id, candidate.outerwear?.id]
+        .filter((x): x is string => Boolean(x))
+        .join('|'))
+      .join('::')}`;
+
+    const { data: ratings, error } = await safeAsync(
+      async () => managedRequest(
+        geminiKey,
+        async () => validateWithGemini(
+          topCandidates,
+          `Tone ${userProfile.skinToneId}`,
+          userProfile.skinUndertone,
+          tasteProfile.styleIdentity,
+          'neutral',
+          `${tasteProfile.patternTolerance}`
+        ),
+        10 * 60 * 1000,
+        1
+      ),
+      'Outfit.validateWithGemini'
+    );
+
+    if (error || !ratings) {
+      console.log('[Outfit] Gemini validation skipped:', error?.message ?? 'unknown error');
+      ranked.forEach((entry) => {
+        entry.candidate.geminiScore = 7;
+        entry.geminiScore = 7;
+      });
+    } else {
+      ratings.forEach((rating) => {
+        const entry = ranked[rating.index];
+        if (entry) {
+          entry.candidate.geminiScore = rating.score;
+          entry.geminiScore = rating.score;
+        }
+      });
+    }
+  }
+
   const results = ranked.slice(0, 3);
   while (results.length < 3 && ranked.length > 0) {
     results.push(ranked[results.length % ranked.length]);
+  }
+
+  if (results.length === 0 && closetItems.length > 0) {
+    const top = closetItems.find((item) => item.category === 'top');
+    const bottom = closetItems.find((item) => item.category === 'bottom');
+    if (top && bottom) {
+      const fallback = buildCandidate([top, bottom]);
+      if (fallback) {
+        results.push({
+          candidate: fallback,
+          items: [top, bottom],
+          rawScore: 6,
+          tasteScore: 6,
+          skinScore: 6,
+          finalScore: 6,
+          geminiScore: 7,
+        });
+      }
+    }
   }
 
   const outfits: Outfit[] = results.map((entry) => ({
@@ -656,7 +721,7 @@ export async function generateOutfits(
     itemIds: entry.items.map((item) => item.id),
     colorScore: Math.round(entry.rawScore * 10),
     skinScore: Math.round(entry.skinScore * 10),
-    geminiScore: 7,
+    geminiScore: Math.round(entry.geminiScore),
     tasteScore: Math.round(entry.tasteScore * 10),
     finalScore: Math.round(entry.finalScore * 10),
     wornOn: null,

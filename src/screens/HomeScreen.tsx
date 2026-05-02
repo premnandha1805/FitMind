@@ -90,6 +90,8 @@ export default function HomeScreen(): React.JSX.Element {
 
   const handleOccasionSelect = useCallback(async (occ: string) => {
     if (!userProfile || !tasteProfile) return;
+    console.log('[Debug] Closet items:', closetItems.map((item) => `${item.category}(${item.styleType})`).join(', '));
+    console.log('[Debug] Occasion selected:', occ);
     await safeAsync(async () => {
       const weatherCloset = weatherData ? filterByWeather(closetItems, weatherData) : closetItems;
       await generate(occ, weatherCloset, userProfile, tasteProfile);
