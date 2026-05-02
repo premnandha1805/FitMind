@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { Platform } from 'react-native';
 import { executeSqlWithRetry, executeTransactionWithRetry } from '../db/queries';
-import { generateGuaranteed } from '../services/outfitEngine';
+import { buildAroundItem, generateGuaranteed } from '../services/outfitEngine';
 import { ClothingItem, Outfit, TasteProfile, UserProfile } from '../types/models';
 import { safeAsync } from '../utils/safeAsync';
 
@@ -11,6 +11,8 @@ interface OutfitState {
   note: string | null;
   candidatePool: string[];
   generate: (occasion: string, closetItems: ClothingItem[], user: UserProfile, taste: TasteProfile) => Promise<void>;
+  generateAroundItem: (anchorItem: ClothingItem, occasion: string, closetItems: ClothingItem[], user: UserProfile, taste: TasteProfile) => Promise<void>;
+  setOutfits: (outfits: Outfit[], note?: string | null) => void;
 }
 
 export const useOutfitStore = create<OutfitState>((set) => ({
@@ -18,6 +20,7 @@ export const useOutfitStore = create<OutfitState>((set) => ({
   loading: false,
   note: null,
   candidatePool: [],
+  setOutfits: (outfits, note = null) => set({ outfits, note, loading: false }),
   generate: async (occasion, closetItems, user, taste) => {
     if (Platform.OS === 'web') {
       set({ outfits: [], loading: false, note: null, candidatePool: [] });
@@ -81,5 +84,13 @@ export const useOutfitStore = create<OutfitState>((set) => ({
 
 
     set({ outfits: data.slice(0, 3), loading: false, candidatePool: [] });
+  },
+  generateAroundItem: async (anchorItem, occasion, closetItems, user, taste) => {
+    set({ loading: true, note: null });
+    const { data } = await safeAsync(
+      async () => buildAroundItem(anchorItem, closetItems, occasion, user, taste),
+      'Outfit.generateAroundItem'
+    );
+    set({ outfits: data ?? [], loading: false, note: data?.length ? `Built around ${anchorItem.subcategory}` : 'Could not build around this item.' });
   },
 }));
