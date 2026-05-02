@@ -674,7 +674,7 @@ export async function generateOutfits(
     );
 
     if (error || !ratings) {
-      console.log('[Outfit] Gemini validation skipped:', error?.message ?? 'unknown error');
+      console.log('[Outfit] Gemini validation skipped:', error ?? 'unknown error');
       ranked.forEach((entry) => {
         entry.candidate.geminiScore = 7;
         entry.geminiScore = 7;
