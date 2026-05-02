@@ -23,31 +23,40 @@ interface GuaranteedCandidate {
   items: ClothingItem[];
   rawScore: number;
 }
+export interface WeightVector { colorWeight: number; skinWeight: number; tasteWeight: number; geminiWeight: number; patternWeight: number; occasionWeight: number; }
+export interface PersonalTasteModel { topColorFamilies: Array<{ family: string; score: number }>; avoidColorFamilies: Array<{ family: string; score: number }>; topPatterns: Array<{ pattern: string; score: number }>; blockedPatterns: string[]; }
+interface OutfitScore { color: number; skin: number; taste: number; occasion: number; pattern: number; final: number; }
 
-export const OCCASION_MAP: Record<string, string> = {
-  college: 'casual', university: 'casual', school: 'casual',
-  class: 'casual', campus: 'casual', lecture: 'casual',
-
-  office: 'professional', work: 'professional', meeting: 'professional',
-  interview: 'professional', presentation: 'professional',
-
-  party: 'party', birthday: 'party', celebration: 'party',
-  date: 'party', dinner: 'smart_casual', lunch: 'casual',
-
-  wedding: 'ethnic', festival: 'ethnic', puja: 'ethnic',
-  diwali: 'ethnic', eid: 'ethnic', function: 'ethnic',
-
-  gym: 'sports', workout: 'sports', sports: 'sports',
-
-  casual: 'casual', formal: 'formal', everyday: 'casual',
-  outing: 'casual', shopping: 'casual', travel: 'casual',
+export const OCCASION_STYLE_MAP: Record<string, ClothingItem['styleType'][]> = {
+  casual: ['casual', 'smart_casual', 'sports', 'party', 'professional', 'formal'],
+  office: ['professional', 'formal', 'smart_casual', 'casual'],
+  work: ['professional', 'formal', 'smart_casual', 'casual'],
+  college: ['casual', 'smart_casual', 'sports', 'party', 'professional'],
+  professional: ['professional', 'formal', 'smart_casual', 'casual'],
+  formal: ['formal', 'professional', 'smart_casual'],
+  party: ['party', 'casual', 'smart_casual', 'formal'],
+  ethnic: ['ethnic', 'formal', 'party', 'casual'],
+  gym: ['sports', 'casual'],
+  sports: ['sports', 'casual'],
+  date: ['party', 'smart_casual', 'casual', 'formal'],
+  wedding: ['ethnic', 'formal', 'party'],
+  festival: ['ethnic', 'party', 'casual'],
+  travel: ['casual', 'smart_casual', 'sports'],
+  default: ['casual', 'smart_casual', 'professional', 'formal', 'party', 'ethnic', 'sports'],
 };
 
 export function resolveOccasion(userInput: string): string {
-  const lower = userInput.toLowerCase();
-  if (OCCASION_MAP[lower]) return OCCASION_MAP[lower];
-  for (const [key, value] of Object.entries(OCCASION_MAP)) {
-    if (lower.includes(key)) return value;
+  const s = userInput.toLowerCase().trim();
+  if (OCCASION_STYLE_MAP[s]) return s;
+  const entries = Object.entries({
+    college: 'college', university: 'college', school: 'college', campus: 'college', class: 'college',
+    office: 'office', work: 'office', meeting: 'office', interview: 'professional', presentation: 'professional',
+    party: 'party', birthday: 'party', celebration: 'party', date: 'date', dinner: 'date', restaurant: 'date',
+    wedding: 'wedding', festival: 'festival', puja: 'ethnic', temple: 'ethnic', function: 'ethnic',
+    gym: 'gym', workout: 'gym', sports: 'sports', travel: 'travel', trip: 'travel', vacation: 'travel',
+  });
+  for (const [key, value] of entries) {
+    if (s.includes(key)) return value;
   }
   return 'casual';
 }
@@ -126,20 +135,7 @@ function calculateRawScore(items: ClothingItem[]): number {
 }
 
 function filterForOccasion(items: ClothingItem[], occasion: string): FilteredCloset {
-  const occasionStyleMap: Record<string, ClothingItem['styleType'][]> = {
-    college: ['casual', 'smart_casual', 'sports'],
-    casual: ['casual', 'smart_casual', 'sports', 'party'],
-    office: ['professional', 'formal', 'smart_casual', 'casual'],
-    formal: ['formal', 'professional', 'smart_casual'],
-    party: ['party', 'casual', 'smart_casual', 'formal'],
-    ethnic: ['ethnic', 'formal', 'party'],
-    professional: ['professional', 'formal', 'smart_casual'],
-    gym: ['sports', 'casual'],
-    default: ['casual', 'smart_casual', 'professional', 'formal', 'party', 'ethnic', 'sports'],
-  };
-
-  const normalizedOccasion = occasion.toLowerCase();
-  const targetStyles = occasionStyleMap[normalizedOccasion] ?? occasionStyleMap.default;
+  const targetStyles = OCCASION_STYLE_MAP[resolveOccasion(occasion)] ?? OCCASION_STYLE_MAP.default;
 
   let tops = items.filter((i) => i.category === 'top' && targetStyles.includes(i.styleType));
   let bottoms = items.filter((i) => i.category === 'bottom' && targetStyles.includes(i.styleType));
@@ -157,6 +153,10 @@ function filterForOccasion(items: ClothingItem[], occasion: string): FilteredClo
   const accessories = items.filter((i) => i.category === 'accessory');
 
   return { tops, bottoms, shoes, accessories };
+}
+
+export function filterClosetForOccasion(items: ClothingItem[], occasion: string): FilteredCloset {
+  return filterForOccasion(items, occasion);
 }
 
 function buildSingleItemOutfits(shoes: ClothingItem[], accessories: ClothingItem[], count: number): GuaranteedCandidate[] {
@@ -543,6 +543,58 @@ export async function filterRecentOutfits(candidates: OutfitCandidate[]): Promis
   });
 }
 
+function clamp(v: number, min: number, max: number): number { return Math.max(min, Math.min(max, v)); }
+function scoreOccasionFit(items: ClothingItem[], occasion: string): number {
+  const allowed = OCCASION_STYLE_MAP[resolveOccasion(occasion)] ?? OCCASION_STYLE_MAP.default;
+  const matched = items.filter((i) => allowed.includes(i.styleType)).length;
+  return clamp((matched / Math.max(items.length, 1)) * 10, 1, 10);
+}
+function scorePatternMix(items: ClothingItem[]): number {
+  const bold = items.filter((i) => ['stripes', 'checks', 'floral', 'print', 'geometric', 'abstract'].includes(i.pattern)).length;
+  return bold <= 1 ? 9 : bold === 2 ? 7 : 5;
+}
+function scoreAgainstPersonalModel(items: ClothingItem[], model: PersonalTasteModel): number {
+  let score = 5;
+  items.forEach((item) => {
+    const loved = model.topColorFamilies.find((c) => c.family === item.colorFamily);
+    if (loved) score += loved.score * 1.5;
+    const avoided = model.avoidColorFamilies.find((c) => c.family === item.colorFamily);
+    if (avoided) score -= avoided.score * 2;
+    if (model.blockedPatterns.includes(item.pattern)) score -= 3;
+    const likedPattern = model.topPatterns.find((p) => p.pattern === item.pattern);
+    if (likedPattern) score += likedPattern.score * 0.5;
+  });
+  return clamp(score, 1, 10);
+}
+export function scoreOutfitComplete(items: ClothingItem[], toneId: number, undertone: string, tasteModel: PersonalTasteModel, weights: WeightVector, occasion: string): OutfitScore {
+  const colorScore = scoreColorHarmony(items);
+  const skinScore = scoreSkinCompatibility(items, toneId, undertone as Undertone);
+  const tasteScore = scoreAgainstPersonalModel(items, tasteModel);
+  const occasionScore = scoreOccasionFit(items, occasion);
+  const patternScore = scorePatternMix(items);
+  const final = colorScore * weights.colorWeight + skinScore * weights.skinWeight + tasteScore * weights.tasteWeight + occasionScore * weights.occasionWeight + patternScore * weights.patternWeight;
+  return { color: Math.round(colorScore * 10) / 10, skin: Math.round(skinScore * 10) / 10, taste: Math.round(tasteScore * 10) / 10, occasion: Math.round(occasionScore * 10) / 10, pattern: Math.round(patternScore * 10) / 10, final: Math.round(final * 10) / 10 };
+}
+
+export async function generateOutfitsProduction(occasionInput: string, closet: ClothingItem[], userProfile: UserProfile, tasteModel: PersonalTasteModel, weights: WeightVector): Promise<Outfit[]> {
+  if (!closet.length) return [];
+  const occasion = resolveOccasion(occasionInput);
+  const filtered = filterClosetForOccasion(closet, occasionInput);
+  const candidates: Array<{ items: ClothingItem[]; score: OutfitScore }> = [];
+  for (const top of filtered.tops.slice(0, 10)) {
+    for (const bottom of filtered.bottoms.slice(0, 10)) {
+      const items: ClothingItem[] = [top, bottom];
+      if (filtered.shoes.length) items.push(findBestColorMatch(filtered.shoes, items));
+      if (filtered.accessories.length) items.push(findBestColorMatch(filtered.accessories, items));
+      candidates.push({ items, score: scoreOutfitComplete(items, userProfile.skinToneId, userProfile.skinUndertone, tasteModel, weights, occasion) });
+      if (candidates.length >= 50) break;
+    }
+    if (candidates.length >= 50) break;
+  }
+  const ranked = candidates.sort((a, b) => b.score.final - a.score.final).slice(0, 3);
+  return ranked.map((c) => ({ id: `outfit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name: generateOutfitName(occasion, c.score.color, c.score.skin), occasion, itemIds: c.items.map((i) => i.id), colorScore: c.score.color * 10, skinScore: c.score.skin * 10, geminiScore: 7, tasteScore: c.score.taste * 10, finalScore: c.score.final * 10, wornOn: null, liked: 0, createdAt: new Date().toISOString(), reasons: generateOutfitExplanation(buildCandidate(c.items) as OutfitCandidate, userProfile.skinToneId, userProfile.skinUndertone, occasion).slice(0, 4) }));
+}
+
 export async function generateOutfits(
   occasion: string,
   closetItems: ClothingItem[],
@@ -697,20 +749,35 @@ export async function buildAroundItem(
   _userProfile: UserProfile,
   _tasteProfile: TasteProfile
 ): Promise<Outfit[]> {
-  const others = closet.filter((i) => i.id !== anchorItem.id);
-  let partners: ClothingItem[];
-  if (anchorItem.category === 'top') partners = others.filter((i) => i.category === 'bottom');
-  else if (anchorItem.category === 'bottom') partners = others.filter((i) => i.category === 'top');
-  else partners = others.filter((i) => i.category === 'top' || i.category === 'bottom');
-
+  const scoped = filterByOccasion(closet, resolveOccasion(occasion));
+  const others = scoped.filter((i) => i.id !== anchorItem.id);
+  const tops = others.filter((i) => i.category === 'top');
+  const bottoms = others.filter((i) => i.category === 'bottom');
   const shoes = others.filter((i) => i.category === 'shoes');
   const accessories = others.filter((i) => i.category === 'accessory');
   const candidates: Outfit[] = [];
-  for (const partner of partners.slice(0, 8)) {
-    const items = anchorItem.category === 'top' ? [anchorItem, partner] : [partner, anchorItem];
-    if (shoes.length > 0) items.push(shoes[0]);
-    if (accessories.length > 0) items.push(accessories[0]);
-    candidates.push(makeOutfit(items, occasion));
+  if (anchorItem.category === 'top') {
+    for (const bottom of bottoms.slice(0, 8)) {
+      const items = [anchorItem, bottom];
+      if (shoes.length > 0) items.push(findBestColorMatch(shoes, items));
+      if (accessories.length > 0) items.push(findBestColorMatch(accessories, items));
+      candidates.push(makeOutfit(items, occasion));
+    }
+  } else if (anchorItem.category === 'bottom') {
+    for (const top of tops.slice(0, 8)) {
+      const items = [top, anchorItem];
+      if (shoes.length > 0) items.push(findBestColorMatch(shoes, items));
+      if (accessories.length > 0) items.push(findBestColorMatch(accessories, items));
+      candidates.push(makeOutfit(items, occasion));
+    }
+  } else {
+    for (const top of tops.slice(0, 6)) {
+      for (const bottom of bottoms.slice(0, 6)) {
+        const items = [top, bottom, anchorItem];
+        if (shoes.length > 0 && anchorItem.category !== 'shoes') items.push(findBestColorMatch(shoes, items));
+        candidates.push(makeOutfit(items, occasion));
+      }
+    }
   }
   return candidates.sort((a, b) => b.finalScore - a.finalScore).slice(0, 3);
 }

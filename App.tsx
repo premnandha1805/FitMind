@@ -30,8 +30,9 @@ import GeminiKeySetupScreen from './src/screens/GeminiKeySetupScreen';
 import { validateGeminiKey } from './src/services/gemini';
 import { retryQueuedFeedback } from './src/services/feedbackEngine';
 import { cleanExpiredCache } from './src/services/cacheEngine';
-
-void SplashScreen.preventAutoHideAsync();
+import { getCacheStats } from './src/services/cacheEngine';
+import { getRateLimitStats } from './src/services/rateLimit';
+import { repairExistingItems } from './src/db/schema';
 
 export default function App(): React.JSX.Element | null {
   const [fontsLoaded] = useFonts({
@@ -53,29 +54,25 @@ export default function App(): React.JSX.Element | null {
   const [keyValid, setKeyValid] = useState(true);
 
   useEffect(() => {
-    if (fontsLoaded) {
-      void SplashScreen.hideAsync();
-    }
-  }, [fontsLoaded]);
-
-  useEffect(() => {
     const unsubscribe = NetInfo.addEventListener((state) => {
       setOffline(!(state.isConnected ?? false));
     });
 
     safeAsync(async () => {
+      await SplashScreen.preventAutoHideAsync();
+      if (!fontsLoaded) return;
       const rawKey = Constants.expoConfig?.extra?.geminiApiKey as string | undefined;
       const key = typeof rawKey === 'string' ? rawKey.trim() : '';
       const configured = Boolean(key) && key.toLowerCase() !== 'paste_your_key_here_no_quotes';
       console.log('Gemini key configured:', configured);
 
       if (Platform.OS !== 'web') {
-        // a. (Fonts handled by useFonts above)
-        // b. Clean expired cache
-        await cleanExpiredCache();
-        // c. Initialize SQLite DB
         await initializeDatabase();
-        console.log('[App] DB & Cache ready');
+        console.log('[App] DB ready');
+        await repairExistingItems();
+        console.log('[App] Items repaired');
+        const cleaned = await cleanExpiredCache();
+        console.log('[App] Cache cleaned:', cleaned, 'entries');
       }
 
       // f. Load user profile
@@ -95,9 +92,14 @@ export default function App(): React.JSX.Element | null {
         const { data: valid } = await safeAsync(async () => validateGeminiKey(), 'App.validateGeminiKey');
         setKeyValid(Boolean(valid));
       }
+      if (__DEV__ && Platform.OS !== 'web') {
+        console.log('[App] Cache stats:', JSON.stringify(await getCacheStats()));
+        console.log('[App] Rate stats:', JSON.stringify(await getRateLimitStats()));
+      }
 
       // g. Show first screen
       setReady(true);
+      await SplashScreen.hideAsync();
     }, 'App.bootstrapInit');
 
     const appStateSub = AppState.addEventListener('change', (status: AppStateStatus) => {
@@ -110,7 +112,7 @@ export default function App(): React.JSX.Element | null {
       unsubscribe();
       appStateSub.remove();
     };
-  }, [loadUser, refreshTaste]);
+  }, [fontsLoaded, loadUser, refreshTaste]);
 
   if (!fontsLoaded) {
     return null;
