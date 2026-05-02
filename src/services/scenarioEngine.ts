@@ -296,13 +296,18 @@ export async function extractScenarioContext(
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const response = await callGeminiPrompt(prompt);
     if (response.status === 429) {
-      throw new Error('RATE_LIMIT');
+      return {
+        context: normalizeContext(buildKeywordFallbackContext(userMessage)),
+        usedFallback: true,
+      };
     }
 
     const parsed = extractJSON(response.text);
     if (parsed) {
+      const normalized = normalizeContext(parsed);
+      const corrected = applyKeywordCorrections(normalized, userMessage);
       return {
-        context: normalizeContext(parsed),
+        context: corrected,
         usedFallback: false,
       };
     }
@@ -312,7 +317,26 @@ export async function extractScenarioContext(
     }
   }
 
-  return { context: normalizeContext({ ...FALLBACK_CONTEXT }), usedFallback: true };
+  return { context: normalizeContext(buildKeywordFallbackContext(userMessage)), usedFallback: true };
+}
+
+function buildKeywordFallbackContext(userMessage: string): ScenarioContext {
+  const lower = userMessage.toLowerCase();
+  if (lower.includes('interview')) {
+    return { ...FALLBACK_CONTEXT, event_type: 'job interview', occasion_category: 'professional', dress_code: 'business formal', formality: 8 };
+  }
+  if (lower.includes('wedding')) return { ...FALLBACK_CONTEXT, event_type: 'wedding', occasion_category: 'ethnic', dress_code: 'ethnic formal', formality: 8 };
+  if (lower.includes('date')) return { ...FALLBACK_CONTEXT, event_type: 'date', occasion_category: 'party', dress_code: 'smart casual', formality: 6 };
+  if (lower.includes('office') || lower.includes('work')) return { ...FALLBACK_CONTEXT, event_type: 'office', occasion_category: 'professional', dress_code: 'business casual', formality: 7 };
+  return { ...FALLBACK_CONTEXT };
+}
+
+function applyKeywordCorrections(context: ScenarioContext, userMessage: string): ScenarioContext {
+  const lower = userMessage.toLowerCase();
+  if (lower.includes('interview')) {
+    return { ...context, occasion_category: 'professional', dress_code: 'business formal', formality: Math.max(context.formality, 8) };
+  }
+  return context;
 }
 
 function getSeasonFromMonth(month: number): 'spring' | 'summer' | 'autumn' | 'winter' {
