@@ -1,5 +1,5 @@
 import { CATEGORY_BY_OCCASION } from '../constants/styleRules';
-import { Outfit, OutfitCandidate, ClothingItem, TasteProfile, UserProfile, Undertone } from '../types/models';
+import { Outfit, OutfitCandidate, ClothingItem, TasteProfile, UserProfile, Undertone, TripPlan } from '../types/models';
 import { getSeasonalPalette, colorSimilar, scoreColorHarmony, scoreOutfitProfessional, scoreSkinCompatibility } from './colorEngine';
 import { validateWithGemini } from './gemini';
 import { recalculateTasteWeights } from './feedbackEngine';
@@ -669,4 +669,71 @@ export async function generateGuaranteed(
   // Guarantee 3 even if filtered failed
   const fallback = generateFallbackOutfits(closet, 3 - outfits.length);
   return [...outfits, ...fallback].slice(0, 3);
+}
+
+function makeOutfit(items: ClothingItem[], occasion = 'casual'): Outfit {
+  const finalScore = Math.round(calculateRawScore(items) * 10);
+  return {
+    id: `build-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: 'Built Around Your Pick',
+    occasion,
+    itemIds: items.map((i) => i.id),
+    colorScore: finalScore,
+    skinScore: finalScore,
+    geminiScore: Math.round(finalScore / 10),
+    tasteScore: finalScore,
+    finalScore,
+    wornOn: null,
+    liked: 0,
+    createdAt: new Date().toISOString(),
+    reasons: ['Built around your selected item'],
+  };
+}
+
+export async function buildAroundItem(
+  anchorItem: ClothingItem,
+  closet: ClothingItem[],
+  occasion: string,
+  _userProfile: UserProfile,
+  _tasteProfile: TasteProfile
+): Promise<Outfit[]> {
+  const others = closet.filter((i) => i.id !== anchorItem.id);
+  let partners: ClothingItem[];
+  if (anchorItem.category === 'top') partners = others.filter((i) => i.category === 'bottom');
+  else if (anchorItem.category === 'bottom') partners = others.filter((i) => i.category === 'top');
+  else partners = others.filter((i) => i.category === 'top' || i.category === 'bottom');
+
+  const shoes = others.filter((i) => i.category === 'shoes');
+  const accessories = others.filter((i) => i.category === 'accessory');
+  const candidates: Outfit[] = [];
+  for (const partner of partners.slice(0, 8)) {
+    const items = anchorItem.category === 'top' ? [anchorItem, partner] : [partner, anchorItem];
+    if (shoes.length > 0) items.push(shoes[0]);
+    if (accessories.length > 0) items.push(accessories[0]);
+    candidates.push(makeOutfit(items, occasion));
+  }
+  return candidates.sort((a, b) => b.finalScore - a.finalScore).slice(0, 3);
+}
+
+export async function generateTripOutfits(
+  days: number,
+  occasion: string,
+  closet: ClothingItem[],
+  userProfile: UserProfile,
+  tasteProfile: TasteProfile
+): Promise<TripPlan> {
+  const outfits: Outfit[] = [];
+  const usedItemIds = new Set<string>();
+  for (let day = 0; day < days; day += 1) {
+    const available = closet.filter((i) => !usedItemIds.has(i.id) || closet.length < days * 2);
+    const dayOutfits = await generateGuaranteed(occasion, available, userProfile, tasteProfile);
+    if (dayOutfits.length > 0) {
+      const outfit = dayOutfits[0];
+      outfits.push({ ...outfit, day: day + 1 });
+      outfit.itemIds.forEach((id) => usedItemIds.add(id));
+    }
+  }
+  const unique = [...new Map(outfits.flatMap((o) => o.itemIds).map((id) => [id, closet.find((c) => c.id === id)])).values()]
+    .filter((i): i is ClothingItem => Boolean(i));
+  return { outfits, packingList: unique, totalItems: unique.length, daysPlanned: outfits.length };
 }
