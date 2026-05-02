@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   FlatList,
   Image,
@@ -22,6 +23,8 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/types';
 import { ClothingItem as ClothingItemModel } from '../types/models';
 import { useUserStore } from '../store/useUserStore';
+import { useTasteStore } from '../store/useTasteStore';
+import { useOutfitStore } from '../store/useOutfitStore';
 
 function monthToSeason(month: number): string {
   if (month >= 5 && month <= 7) return 'Summer Collection';
@@ -84,6 +87,7 @@ function ClosetCard({
   onImageError,
   onRetake,
   onLongPress,
+  onPress,
 }: {
   item: ClothingItemModel;
   width: number;
@@ -91,6 +95,7 @@ function ClosetCard({
   onImageError: (itemId: string) => void;
   onRetake: (item: ClothingItemModel) => void;
   onLongPress: (item: ClothingItemModel) => void;
+  onPress: (item: ClothingItemModel) => void;
 }): React.JSX.Element {
   const lift = useRef(new Animated.Value(0)).current;
   const grayscaleOverlay = useRef(new Animated.Value(1)).current;
@@ -117,6 +122,7 @@ function ClosetCard({
     <Animated.View style={{ width, transform: [{ translateY }] }}>
       <Pressable
         style={styles.card}
+        onPress={() => onPress(item)}
         onLongPress={() => onLongPress(item)}
         onHoverIn={() => onHover(true)}
         onHoverOut={() => onHover(false)}
@@ -212,6 +218,9 @@ export default function ClosetScreen(): React.JSX.Element {
   const deleteItem = useClosetStore((s) => s.deleteItem);
   const profile = useUserStore((s) => s.profile);
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
+  const generateAroundItem = useOutfitStore((s) => s.generateAroundItem);
+  const taste = useTasteStore((s) => s.profile);
+  const user = useUserStore((s) => s.profile);
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const compact = width < 380;
@@ -300,6 +309,19 @@ export default function ClosetScreen(): React.JSX.Element {
                 });
               }}
               onLongPress={(closetItem) => setDeleteTarget(closetItem)}
+              onPress={(closetItem) => {
+                Alert.alert('Item Actions', 'Choose an action', [
+                  {
+                    text: 'Build Outfit Around This',
+                    onPress: () => {
+                      if (user && taste) void generateAroundItem(closetItem, 'casual', items, user, taste);
+                    },
+                  },
+                  { text: 'Edit', onPress: () => navigation.navigate('AddItem', { existingItemId: closetItem.id }) },
+                  { text: 'Delete', style: 'destructive', onPress: () => setDeleteTarget(closetItem) },
+                  { text: 'Cancel', style: 'cancel' },
+                ]);
+              }}
             />
           )}
           columnWrapperStyle={{ gap, marginBottom: gap }}

@@ -1,78 +1,15 @@
-import { executeSqlWithRetry, getOne } from '../db/queries';
-
-const memoryCache = new Map<string, { data: any; expires: number }>();
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-export function setMemory(key: string, data: any, ttlMs: number): void {
-  memoryCache.set(key, { data, expires: Date.now() + ttlMs });
-}
-
-export function getMemory(key: string): any | null {
-  const item = memoryCache.get(key);
-  if (!item) return null;
-  if (Date.now() > item.expires) {
-    memoryCache.delete(key);
-    return null;
-  }
-  return item.data;
-}
-
-export async function setDB(key: string, data: any, ttlDays: number): Promise<void> {
-  const now = Date.now();
-  const expiresAt = now + Math.max(1, ttlDays) * DAY_MS;
-  const value = JSON.stringify(data);
-
-  await executeSqlWithRetry(
-    `INSERT OR REPLACE INTO api_cache (key, value, created_at, expires_at)
-     VALUES (?, ?, ?, ?);`,
-    [key, value, now, expiresAt]
-  );
-}
-
-export async function getDB(key: string): Promise<any | null> {
-  const now = Date.now();
-  const row = await getOne<{ value: string; expires_at: number }>(
-    `SELECT value, expires_at FROM api_cache
-     WHERE key = ? AND expires_at > ?;`,
-    [key, now]
-  );
-
-  if (!row) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(row.value) as any;
-    const ttlMs = row.expires_at - now;
-    if (ttlMs > 0) {
-      setMemory(key, parsed, ttlMs);
-    }
-    return parsed;
-  } catch {
-    await executeSqlWithRetry('DELETE FROM api_cache WHERE key = ?;', [key]);
-    return null;
-  }
-}
-
-export async function getCached(key: string): Promise<any | null> {
-  return getMemory(key) || await getDB(key) || null;
-}
-
-/** Convenience: write to both memory + SQLite in one call. */
-export async function setCached(
-  key: string,
-  data: any,
-  ttlMs: number,
-  ttlDays: number
-): Promise<void> {
-  setMemory(key, data, ttlMs);
-  await setDB(key, data, ttlDays);
-}
-
-export async function cleanExpiredCache(): Promise<void> {
-  await executeSqlWithRetry('DELETE FROM api_cache WHERE expires_at < ?;', [Date.now()]);
-}
-
-/** Alias kept for compatibility with PRD naming. */
-export const cleanCache = cleanExpiredCache;
+import * as SQLite from 'expo-sqlite';
+import { logRequest } from './rateLimit';
+const db = SQLite.openDatabaseSync('fitmind.db');
+const MEM_CACHE = new Map<string, { data: any; expires: number; hits: number }>();
+export enum CacheCategory { FIT_CHECK='fit_check', OUTFIT_VAL='outfit_validation', SCENARIO='scenario', SKIN_COLORS='skin_colors', WEATHER='weather', CLASSIFICATION='classification' }
+const CACHE_TTL = { [CacheCategory.FIT_CHECK]: { mem: 3600000, db: 7 }, [CacheCategory.OUTFIT_VAL]: { mem: 1800000, db: 3 }, [CacheCategory.SCENARIO]: { mem: 900000, db: 1 }, [CacheCategory.SKIN_COLORS]: { mem: 86400000, db: 30 }, [CacheCategory.WEATHER]: { mem: 1800000, db: 0 }, [CacheCategory.CLASSIFICATION]: { mem: 3600000, db: 14 } };
+export function memGet(key: string): any | null { const item = MEM_CACHE.get(key); if (!item) return null; if (Date.now() > item.expires) { MEM_CACHE.delete(key); return null; } item.hits++; return item.data; }
+export function memSet(key: string, data: any, ttlMs: number): void { MEM_CACHE.set(key, { data, expires: Date.now() + ttlMs, hits: 0 }); }
+export async function dbGet(key: string): Promise<any | null> { try { const row = await db.getFirstAsync<{value:string, expires_at:number}>(`SELECT value, expires_at FROM api_cache WHERE key = ? AND expires_at > ?`, [key, Math.floor(Date.now() / 1000)]); if (!row) return null; await db.runAsync(`UPDATE api_cache SET hit_count = hit_count + 1, last_hit = ? WHERE key = ?`, [Math.floor(Date.now() / 1000), key]); return JSON.parse(row.value); } catch { return null; } }
+export async function dbSet(key: string, data: any, ttlDays: number, category: string = 'general'): Promise<void> { if (ttlDays <= 0) return; const expires = Math.floor(Date.now() / 1000) + (ttlDays * 86400); await db.runAsync(`INSERT OR REPLACE INTO api_cache (key, value, category, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`, [key, JSON.stringify(data), category, expires, Math.floor(Date.now() / 1000)]); }
+export async function getCached(key: string): Promise<any | null> { const mem = memGet(key); if (mem !== null) { await logRequest('cache_read', 'cache', 0, true); return mem; } const dbResult = await dbGet(key); if (dbResult !== null) { memSet(key, dbResult, 1800000); await logRequest('cache_read', 'cache', 0, true); return dbResult; } return null; }
+export async function setCached(key: string, data: any, category: CacheCategory): Promise<void> { const ttl = CACHE_TTL[category]; memSet(key, data, ttl.mem); await dbSet(key, data, ttl.db, category); }
+export async function invalidateCache(category?: CacheCategory): Promise<void> { if (category) { await db.runAsync('DELETE FROM api_cache WHERE category = ?', [category]); for (const [key] of MEM_CACHE) if (key.startsWith(category)) MEM_CACHE.delete(key); } else { MEM_CACHE.clear(); await db.runAsync('DELETE FROM api_cache'); } }
+export async function cleanExpiredCache(): Promise<number> { const result = await db.runAsync('DELETE FROM api_cache WHERE expires_at < ?', [Math.floor(Date.now() / 1000)]); const deleted = result.changes || 0; const now = Date.now(); for (const [key, item] of MEM_CACHE) if (now > item.expires) MEM_CACHE.delete(key); return deleted; }
+export async function getCacheStats(): Promise<any> { const total = await db.getFirstAsync<{count:number, hits:number}>('SELECT COUNT(*) as count, SUM(hit_count) as hits FROM api_cache'); const byCategory = await db.getAllAsync<{category:string, count:number}>('SELECT category, COUNT(*) as count FROM api_cache GROUP BY category'); return { totalEntries: total?.count || 0, totalHits: total?.hits || 0, memoryEntries: MEM_CACHE.size, byCategory }; }

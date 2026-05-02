@@ -21,6 +21,8 @@ import { useOutfitStore } from '../store/useOutfitStore';
 import { useTasteStore } from '../store/useTasteStore';
 import { useUserStore } from '../store/useUserStore';
 import { useResponsive } from '../utils/responsive';
+import { generateTripOutfits } from '../services/outfitEngine';
+import { TripPlan } from '../types/models';
 
 function mapOccasion(input: string): string {
   const lower = input.toLowerCase();
@@ -56,6 +58,10 @@ export default function OccasionScreen(): React.JSX.Element {
   const [formality, setFormality] = useState(45);
   const [timeIndex, setTimeIndex] = useState(2);
   const [weatherIndex, setWeatherIndex] = useState(1);
+  const [plannerMode, setPlannerMode] = useState<'single' | 'trip'>('single');
+  const [tripName, setTripName] = useState('Weekend Trip');
+  const [tripDays, setTripDays] = useState(3);
+  const [tripPlan, setTripPlan] = useState<TripPlan | null>(null);
 
   const mapped = useMemo(
     () => mapOccasion(`${selectedOccasion} ${selectedScenario} ${eventText}`),
@@ -79,7 +85,14 @@ export default function OccasionScreen(): React.JSX.Element {
       Alert.alert('Setup Required', 'Please complete your profile setup before generating outfits.');
       return;
     }
-    void generate(mapped, items, user, taste);
+    if (plannerMode === 'single') {
+      void generate(mapped, items, user, taste);
+      return;
+    }
+    void (async () => {
+      const plan = await generateTripOutfits(tripDays, mapped, items, user, taste);
+      setTripPlan({ ...plan, tripName });
+    })();
   };
 
   const onSaveOccasion = (): void => {
@@ -131,6 +144,22 @@ export default function OccasionScreen(): React.JSX.Element {
             Define the essence of your next outing and let FitMind weave the perfect silhouette.
           </Text>
         </View>
+        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+          <Pressable style={[styles.chip, plannerMode === 'single' ? styles.chipActive : null]} onPress={() => setPlannerMode('single')}><Text style={styles.chipText}>Single Occasion</Text></Pressable>
+          <Pressable style={[styles.chip, plannerMode === 'trip' ? styles.chipActive : null]} onPress={() => setPlannerMode('trip')}><Text style={styles.chipText}>Trip Planner</Text></Pressable>
+        </View>
+        {plannerMode === 'trip' ? (
+          <View style={styles.inputWrap}>
+            <Text style={styles.inputLabel}>Trip name</Text>
+            <TextInput value={tripName} onChangeText={setTripName} style={styles.input} />
+            <Text style={styles.inputLabel}>Days</Text>
+            <View style={styles.chipsRow}>
+              {[1, 2, 3, 4, 5, 7, 10].map((d) => (
+                <Pressable key={d} onPress={() => setTripDays(d)} style={[styles.chip, tripDays === d ? styles.chipActive : null]}><Text style={styles.chipText}>{d}</Text></Pressable>
+              ))}
+            </View>
+          </View>
+        ) : null}
 
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Nature of Event</Text>
@@ -259,6 +288,13 @@ export default function OccasionScreen(): React.JSX.Element {
               Perfect for {eventText || 'your event'}. The color combination is especially flattering for your tone.
             </Text>
             {best.reasons.map((reason, idx) => <Text key={`${reason}-${idx}`} style={styles.resultReason}>- {reason}</Text>)}
+          </View>
+        ) : null}
+        {tripPlan ? (
+          <View style={styles.resultCard}>
+            <Text style={styles.resultTitle}>{tripPlan.tripName} • {tripPlan.daysPlanned} days</Text>
+            {tripPlan.outfits.map((o) => <Text key={o.id} style={styles.resultReason}>Day {o.day}: {o.name}</Text>)}
+            <Text style={styles.resultText}>Pack These {tripPlan.totalItems} Items</Text>
           </View>
         ) : null}
 

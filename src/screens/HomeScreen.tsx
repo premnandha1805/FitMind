@@ -16,6 +16,7 @@ import { useTasteStore } from '../store/useTasteStore';
 import { useUserStore } from '../store/useUserStore';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { Outfit } from '../types/models';
+import { filterByWeather, getWeather, WeatherData } from '../services/weatherEngine';
 
 function score(value: number): string {
   return `${Math.round(value)}`;
@@ -31,6 +32,7 @@ export default function HomeScreen(): React.JSX.Element {
   const note = useOutfitStore((s) => s.note);
   const loading = useOutfitStore((s) => s.loading);
   const generate = useOutfitStore((s) => s.generate);
+  const generateAroundItem = useOutfitStore((s) => s.generateAroundItem);
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
   const tabNavigation = useNavigation<BottomTabNavigationProp<MainTabParamList>>();
   const closetItems = useClosetStore((s) => s.items);
@@ -42,7 +44,18 @@ export default function HomeScreen(): React.JSX.Element {
   const [wearPressed, setWearPressed] = useState(false);
   const [autoRegenerated, setAutoRegenerated] = useState(false);
   const [morningOutfitId, setMorningOutfitId] = useState<string | null>(null);
+  const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
   const rejectAnimations = useRef<Record<string, Animated.Value>>({});
+
+  useEffect(() => {
+    safeAsync(async () => {
+      if (!navigator?.geolocation) return;
+      navigator.geolocation.getCurrentPosition(async (position) => {
+        const weather = await getWeather(position.coords.latitude, position.coords.longitude);
+        setWeatherData(weather);
+      });
+    }, 'HomeScreen.loadWeather');
+  }, []);
 
   useEffect(() => {
     safeAsync(async () => {
@@ -78,9 +91,10 @@ export default function HomeScreen(): React.JSX.Element {
   const handleOccasionSelect = useCallback(async (occ: string) => {
     if (!userProfile || !tasteProfile) return;
     await safeAsync(async () => {
-      await generate(occ, closetItems, userProfile, tasteProfile);
+      const weatherCloset = weatherData ? filterByWeather(closetItems, weatherData) : closetItems;
+      await generate(occ, weatherCloset, userProfile, tasteProfile);
     }, 'HomeScreen.handleOccasionSelect');
-  }, [userProfile, tasteProfile, generate, closetItems]);
+  }, [userProfile, tasteProfile, generate, closetItems, weatherData]);
 
   const handleReject = (outfitId: string): void => {
     const value = rejectAnimations.current[outfitId] ?? new Animated.Value(0);
@@ -156,6 +170,24 @@ export default function HomeScreen(): React.JSX.Element {
         showsVerticalScrollIndicator={false}
       >
         <Text style={[styles.title, { fontSize: compact ? 21 : 24 }]}>Today&apos;s Smart Picks</Text>
+        {weatherData ? (
+          <View style={styles.morningCard}>
+            <Text style={styles.morningTitle}>Dressing for {Math.round(weatherData.temperature)}°C today</Text>
+            <Text style={styles.note}>{weatherData.condition.toUpperCase()} • {weatherData.description}</Text>
+          </View>
+        ) : null}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+          {closetItems.slice(0, 8).map((item) => (
+            <Pressable
+              key={item.id}
+              style={{ backgroundColor: '#201f1f', padding: 10, borderRadius: 12, marginRight: 8 }}
+              onPress={() => userProfile && tasteProfile && generateAroundItem(item, 'casual', closetItems, userProfile, tasteProfile)}
+            >
+              <Text style={{ color: '#fff', fontSize: 12 }}>{item.subcategory}</Text>
+              <Text style={{ color: '#e6c487', fontSize: 12, marginTop: 4 }}>Build outfit around this</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
         {note && !hasNoClosetBasics ? <Text style={styles.note}>{note}</Text> : null}
 
         {errorKind === 'noTopsOrBottoms' ? (

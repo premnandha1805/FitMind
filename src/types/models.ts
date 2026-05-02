@@ -82,6 +82,15 @@ export interface Outfit {
   liked: number;
   createdAt: string;
   reasons: string[];
+  day?: number;
+}
+
+export interface TripPlan {
+  outfits: Outfit[];
+  packingList: ClothingItem[];
+  totalItems: number;
+  daysPlanned: number;
+  tripName?: string;
 }
 
 export interface OutfitCandidate {
