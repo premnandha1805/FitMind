@@ -22,6 +22,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AppNavigator from './src/navigation/AppNavigator';
 import { initializeDatabase } from './src/db/migrations';
 import { OfflineBanner } from './src/components/OfflineBanner';
+import { initializeRequestManager } from './src/services/requestManager';
 import { useUserStore } from './src/store/useUserStore';
 import { useTasteStore } from './src/store/useTasteStore';
 import { useClosetStore } from './src/store/useClosetStore';
@@ -69,6 +70,8 @@ export default function App(): React.JSX.Element | null {
       if (Platform.OS !== 'web') {
         await initializeDatabase();
         console.log('[App] DB ready');
+        await initializeRequestManager();
+        console.log('[App] Request log cleanup done');
         await repairExistingItems();
         console.log('[App] Items repaired');
         const cleaned = await cleanExpiredCache();

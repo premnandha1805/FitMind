@@ -3,6 +3,9 @@ import Constants from 'expo-constants';
 import { getGeminiKey, prepareImageForGemini, validateGeminiResponse } from './gemini';
 import { CAT_MAP, resolveCategory, normalizePattern, normalizeStyle } from '../constants/categoryMap';
 import { Category, ClothingPattern, ClothingStyleType, ClothingSeason, FitType } from '../types/models';
+import { CacheCategory } from './cacheEngine';
+import { managedRequest } from './requestManager';
+import { md5FileHash } from '../utils/hashUtils';
 
 export const CLASSIFY_PROMPT = `
 You are a clothing classifier. Analyze this garment image.
@@ -104,9 +107,11 @@ function normalizeFitType(raw: string): FitType {
 
 function normalizeMLKitLabels(labels: MLKitLabel[]): ClassificationResult {
   const sorted = [...labels].sort((a, b) => b.confidence - a.confidence);
+  const banned = new Set(['clothing', 'garment', 'apparel', 'item', 'other', 'unknown']);
 
   for (const label of sorted) {
     const clean = label.text.toLowerCase().trim();
+    if (banned.has(clean)) continue;
     const category = resolveCategory(clean);
     if (category !== 'top' || CAT_MAP[clean]) {
       return {
@@ -124,8 +129,8 @@ function normalizeMLKitLabels(labels: MLKitLabel[]): ClassificationResult {
 
   return {
     category: 'top',
-    subcategory: 'clothing',
-    ai_raw_label: sorted[0]?.text || 'unknown',
+    subcategory: 'shirt',
+    ai_raw_label: sorted[0]?.text || 'unlabeled',
     confidence: 0.5,
     pattern: 'solid',
     style_type: 'casual',
@@ -139,44 +144,51 @@ async function callGeminiClassify(imageUri: string): Promise<unknown> {
   if (!key) {
     throw new Error('Gemini API key not configured');
   }
+  const cacheKey = `classification-${await md5FileHash(imageUri)}`;
 
-  const imageBase64 = await prepareImageForGemini(imageUri);
+  return managedRequest(
+    cacheKey,
+    async () => {
+      const imageBase64 = await prepareImageForGemini(imageUri);
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: CLASSIFY_PROMPT }] },
+          contents: [{
+            parts: [
+              { text: 'Classify this garment from the user closet photo.' },
+              { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
+            ],
+          }],
+          generationConfig: {
+            response_mime_type: 'application/json',
+          },
+        }),
+      });
 
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{
-        systemInstruction: { parts: [{ text: CLASSIFY_PROMPT }] },
-        parts: [
-          { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
-        ],
-      }],
-      generationConfig: {
-        response_mime_type: 'application/json',
-      },
-    }),
-  });
+      if (!response.ok) {
+        throw new Error(`Gemini classification failed (${response.status})`);
+      }
 
-  if (!response.ok) {
-    throw new Error(`Gemini classification failed (${response.status})`);
-  }
+      const payload = await response.json() as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      };
 
-  const payload = await response.json() as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
+      const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('\n').trim() ?? '';
+      if (!text) {
+        throw new Error('Gemini classification returned empty response');
+      }
 
-  const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('\n').trim() ?? '';
-  if (!text) {
-    throw new Error('Gemini classification returned empty response');
-  }
+      const parsed = validateGeminiResponse(text);
+      if (!parsed) {
+        throw new Error('Gemini classification failed to parse');
+      }
 
-  const parsed = validateGeminiResponse(text);
-  if (!parsed) {
-    throw new Error('Gemini classification failed to parse');
-  }
-
-  return parsed;
+      return parsed;
+    },
+    CacheCategory.CLASSIFICATION
+  );
 }
 
 function validateClassification(raw: any): ClassificationResult {

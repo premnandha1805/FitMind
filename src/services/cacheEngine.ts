@@ -10,6 +10,17 @@ export async function dbGet(key: string): Promise<any | null> { try { const row 
 export async function dbSet(key: string, data: any, ttlDays: number, category: string = 'general'): Promise<void> { if (ttlDays <= 0) return; const expires = Math.floor(Date.now() / 1000) + (ttlDays * 86400); await db.runAsync(`INSERT OR REPLACE INTO api_cache (key, value, category, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`, [key, JSON.stringify(data), category, expires, Math.floor(Date.now() / 1000)]); }
 export async function getCached(key: string): Promise<any | null> { const mem = memGet(key); if (mem !== null) { await logRequest('cache_read', 'cache', 0, true); return mem; } const dbResult = await dbGet(key); if (dbResult !== null) { memSet(key, dbResult, 1800000); await logRequest('cache_read', 'cache', 0, true); return dbResult; } return null; }
 export async function setCached(key: string, data: any, category: CacheCategory): Promise<void> { const ttl = CACHE_TTL[category]; memSet(key, data, ttl.mem); await dbSet(key, data, ttl.db, category); }
+export async function setCachedWithTtl(key: string, data: any, ttlMs: number, ttlDays: number, category: CacheCategory): Promise<void> {
+	const safeTtlMs = Math.max(0, ttlMs);
+	const safeTtlDays = Math.max(0, ttlDays);
+	if (safeTtlMs > 0) {
+		memSet(key, data, safeTtlMs);
+	} else {
+		const ttl = CACHE_TTL[category];
+		memSet(key, data, ttl.mem);
+	}
+	await dbSet(key, data, safeTtlDays, category);
+}
 export async function invalidateCache(category?: CacheCategory): Promise<void> { if (category) { await db.runAsync('DELETE FROM api_cache WHERE category = ?', [category]); for (const [key] of MEM_CACHE) if (key.startsWith(category)) MEM_CACHE.delete(key); } else { MEM_CACHE.clear(); await db.runAsync('DELETE FROM api_cache'); } }
 export async function cleanExpiredCache(): Promise<number> { const result = await db.runAsync('DELETE FROM api_cache WHERE expires_at < ?', [Math.floor(Date.now() / 1000)]); const deleted = result.changes || 0; const now = Date.now(); for (const [key, item] of MEM_CACHE) if (now > item.expires) MEM_CACHE.delete(key); return deleted; }
 export async function getCacheStats(): Promise<any> { const total = await db.getFirstAsync<{count:number, hits:number}>('SELECT COUNT(*) as count, SUM(hit_count) as hits FROM api_cache'); const byCategory = await db.getAllAsync<{category:string, count:number}>('SELECT category, COUNT(*) as count FROM api_cache GROUP BY category'); return { totalEntries: total?.count || 0, totalHits: total?.hits || 0, memoryEntries: MEM_CACHE.size, byCategory }; }

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { Platform } from 'react-native';
 import { executeSqlWithRetry, executeTransactionWithRetry } from '../db/queries';
-import { buildAroundItem, generateGuaranteed } from '../services/outfitEngine';
+import { buildAroundItem, safeGenerateOutfits } from '../services/outfitEngine';
 import { ClothingItem, Outfit, TasteProfile, UserProfile } from '../types/models';
 import { safeAsync } from '../utils/safeAsync';
 
@@ -11,17 +11,15 @@ interface OutfitState {
   note: string | null;
   candidatePool: string[];
   generate: (occasion: string, closetItems: ClothingItem[], user: UserProfile, taste: TasteProfile) => Promise<void>;
+  generateSafe: (occasion: string, closetItems: ClothingItem[], user: UserProfile, taste: TasteProfile) => Promise<void>;
   generateAroundItem: (anchorItem: ClothingItem, occasion: string, closetItems: ClothingItem[], user: UserProfile, taste: TasteProfile) => Promise<void>;
   setOutfits: (outfits: Outfit[], note?: string | null) => void;
 }
 
-export const useOutfitStore = create<OutfitState>((set) => ({
-  outfits: [],
-  loading: false,
-  note: null,
-  candidatePool: [],
-  setOutfits: (outfits, note = null) => set({ outfits, note, loading: false }),
-  generate: async (occasion, closetItems, user, taste) => {
+let activeGenerationKey: string | null = null;
+
+export const useOutfitStore = create<OutfitState>((set) => {
+  const runGenerate = async (occasion: string, closetItems: ClothingItem[], user: UserProfile, taste: TasteProfile) => {
     if (Platform.OS === 'web') {
       set({ outfits: [], loading: false, note: null, candidatePool: [] });
       return;
@@ -32,6 +30,21 @@ export const useOutfitStore = create<OutfitState>((set) => ({
     const shoes = closetItems.filter((item) => item.category === 'shoes');
     const accessories = closetItems.filter((item) => item.category === 'accessory');
     const candidatePool: string[] = [];
+    const generationKey = [
+      occasion.trim().toLowerCase(),
+      user.skinToneId,
+      user.skinUndertone,
+      closetItems.map((item) => `${item.id}:${(item as ClothingItem & { updatedAt?: string }).updatedAt ?? item.createdAt}`).sort().join(','),
+    ].join('|');
+
+    if (activeGenerationKey === generationKey) {
+      return;
+    }
+
+    if (tops.length < 1 || bottoms.length < 1) {
+      set({ outfits: [], loading: false, note: 'Add at least one top and one bottom to generate outfits', candidatePool: [] });
+      return;
+    }
 
     tops.forEach((top) => {
       bottoms.forEach((bottom) => {
@@ -44,10 +57,12 @@ export const useOutfitStore = create<OutfitState>((set) => ({
     });
 
     set({ loading: true, note: null, candidatePool });
+    activeGenerationKey = generationKey;
     const { data, error } = await safeAsync(
-      async () => generateGuaranteed(occasion, closetItems, user, taste),
+      async () => safeGenerateOutfits(occasion, closetItems, user, taste),
       'Outfit.generate'
     );
+    activeGenerationKey = null;
 
     if (error || !data) {
       set({ loading: false, note: 'We are still learning your taste - add more feedback.', candidatePool: [] });
@@ -82,15 +97,24 @@ export const useOutfitStore = create<OutfitState>((set) => ({
       'Outfit.saveTransaction'
     );
 
-
     set({ outfits: data.slice(0, 3), loading: false, candidatePool: [] });
-  },
-  generateAroundItem: async (anchorItem, occasion, closetItems, user, taste) => {
+  };
+
+  return {
+    outfits: [],
+    loading: false,
+    note: null,
+    candidatePool: [],
+    setOutfits: (outfits, note = null) => set({ outfits, note, loading: false }),
+    generate: runGenerate,
+    generateSafe: runGenerate,
+    generateAroundItem: async (anchorItem, occasion, closetItems, user, taste) => {
     set({ loading: true, note: null });
     const { data } = await safeAsync(
       async () => buildAroundItem(anchorItem, closetItems, occasion, user, taste),
       'Outfit.generateAroundItem'
     );
     set({ outfits: data ?? [], loading: false, note: data?.length ? `Built around ${anchorItem.subcategory}` : 'Could not build around this item.' });
-  },
-}));
+    },
+  };
+});

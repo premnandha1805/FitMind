@@ -125,6 +125,8 @@ export interface FitCheckResult {
   confidence_tip?: string;
   style_score: number;
   one_line_verdict: string;
+  detected_style_type?: ClothingStyleType;
+  detected_category?: Category;
 }
 
 export interface TasteProfile {

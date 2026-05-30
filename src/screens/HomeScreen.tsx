@@ -31,7 +31,7 @@ export default function HomeScreen(): React.JSX.Element {
   const outfits = useOutfitStore((s) => s.outfits);
   const note = useOutfitStore((s) => s.note);
   const loading = useOutfitStore((s) => s.loading);
-  const generate = useOutfitStore((s) => s.generate);
+  const generate = useOutfitStore((s) => s.generateSafe);
   const generateAroundItem = useOutfitStore((s) => s.generateAroundItem);
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
   const tabNavigation = useNavigation<BottomTabNavigationProp<MainTabParamList>>();
@@ -268,7 +268,7 @@ export default function HomeScreen(): React.JSX.Element {
                   {Array.from({ length: 4 }).map((_, i) => {
                     const uri = collageUris[i];
                     return uri ? (
-                      <Image key={`${outfit.id}-${i}`} source={{ uri }} resizeMode="cover" style={styles.collageCell} />
+                      <Image key={`${outfit.id}-${i}`} source={{ uri }} resizeMode="contain" style={styles.collageCell} />
                     ) : (
                       <View key={`${outfit.id}-${i}`} style={[styles.collageCell, styles.collageFallback]} />
                     );
@@ -452,12 +452,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 2,
-    backgroundColor: '#353534',
+    backgroundColor: '#111110',
   },
   collageCell: {
     width: '49.6%',
     height: '49.6%',
-    backgroundColor: '#353534',
+    backgroundColor: '#191817',
   },
   collageFallback: {
     backgroundColor: '#353534',

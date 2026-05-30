@@ -6,7 +6,7 @@ import { recalculateTasteWeights } from './feedbackEngine';
 import { explainOutfitChoice, scoreCandidateAgainstTaste } from './tasteEngine';
 import { safeAsync } from '../utils/safeAsync';
 import { getAll } from '../db/queries';
-import { managedRequest, requestLog } from './requestManager';
+import { requestLog } from './requestManager';
 import { getSkinToneColors } from './skinToneEngine';
 
 type SeasonMode = 'summer' | 'winter';
@@ -79,6 +79,33 @@ function candidateItems(candidate: OutfitCandidate): ClothingItem[] {
     .filter((x): x is ClothingItem => Boolean(x));
 }
 
+function outfitItemsKey(items: ClothingItem[]): string {
+  return items.map((item) => item.id).sort().join('|');
+}
+
+function makeStableOutfitId(prefix: string, occasion: string, items: ClothingItem[]): string {
+  const raw = `${prefix}:${occasion}:${outfitItemsKey(items)}`;
+  return `${prefix}-${stableHash(raw)}`;
+}
+
+function stableHash(raw: string): string {
+  let hash = 0;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function dedupeCandidates<T extends { items: ClothingItem[] }>(entries: T[]): T[] {
+  const seen = new Set<string>();
+  return entries.filter((entry) => {
+    const key = outfitItemsKey(entry.items);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function buildCandidate(base: ClothingItem[]): OutfitCandidate | null {
   const top = base.find((i) => i.category === 'top');
   const bottom = base.find((i) => i.category === 'bottom');
@@ -96,28 +123,6 @@ function buildCandidate(base: ClothingItem[]): OutfitCandidate | null {
     geminiScore: 0,
     finalScore: 0,
     reasons: [],
-  };
-}
-
-function createPlaceholderItem(category: 'top' | 'bottom'): ClothingItem {
-  return {
-    id: `placeholder-${category}`,
-    imagePath: '',
-    category,
-    subcategory: `${category}-placeholder`,
-    colorHsl: 'hsl(0,0%,50%)',
-    colorHex: '#808080',
-    colorFamily: 'neutral',
-    pattern: 'solid',
-    styleType: 'casual',
-    fitType: 'regular',
-    season: 'all-season',
-    userCorrected: 0,
-    aiConfidence: 0,
-    aiRawLabel: 'placeholder',
-    timesWorn: 0,
-    lastWorn: null,
-    createdAt: new Date().toISOString(),
   };
 }
 
@@ -140,7 +145,7 @@ function filterForOccasion(items: ClothingItem[], occasion: string): FilteredClo
   let tops = items.filter((i) => i.category === 'top' && targetStyles.includes(i.styleType));
   let bottoms = items.filter((i) => i.category === 'bottom' && targetStyles.includes(i.styleType));
 
-  if (tops.length < 1 || bottoms.length < 1) {
+  if (tops.length === 0 || bottoms.length === 0) {
     console.log('[Outfit] Relaxing style filter - using all items');
     tops = items.filter((i) => i.category === 'top');
     bottoms = items.filter((i) => i.category === 'bottom');
@@ -162,52 +167,26 @@ export function filterClosetForOccasion(items: ClothingItem[], occasion: string)
   return filterForOccasion(items, occasion);
 }
 
-function buildSingleItemOutfits(shoes: ClothingItem[], accessories: ClothingItem[], count: number): GuaranteedCandidate[] {
-  const candidates: GuaranteedCandidate[] = [];
-  const top = createPlaceholderItem('top');
-  const bottom = createPlaceholderItem('bottom');
-
-  for (let i = 0; i < Math.max(1, count); i += 1) {
-    const items: ClothingItem[] = [top, bottom];
-    if (shoes.length) {
-      items.push(shoes[i % shoes.length]);
-    }
-    if (accessories.length) {
-      items.push(accessories[i % accessories.length]);
-    }
-    const candidate = buildCandidate(items);
-    if (!candidate) continue;
-    candidates.push({
-      candidate,
-      items,
-      rawScore: calculateRawScore(items),
-    });
-  }
-
-  return candidates;
-}
-
 function buildGuaranteedOutfits(filtered: FilteredCloset, userProfile: UserProfile, count = 3): GuaranteedCandidate[] {
   const { tops, bottoms, shoes, accessories } = filtered;
 
-  if (tops.length === 0 && bottoms.length === 0) {
-    return buildSingleItemOutfits(shoes, accessories, count);
+  if (tops.length === 0 || bottoms.length === 0) {
+    return [];
   }
 
-  const effectiveTops = tops.length > 0 ? tops : [createPlaceholderItem('top')];
-  const effectiveBottoms = bottoms.length > 0 ? bottoms : [createPlaceholderItem('bottom')];
+  console.log(`OutfitEngine: building combinations from ${tops.length} tops and ${bottoms.length} bottoms`);
 
   const candidates: GuaranteedCandidate[] = [];
 
-  for (const top of effectiveTops) {
-    for (const bottom of effectiveBottoms) {
+  for (const top of tops) {
+    for (const bottom of bottoms) {
       const outfitItems: ClothingItem[] = [top, bottom];
 
       if (shoes.length > 0) {
         outfitItems.push(findBestColorMatch(shoes, outfitItems));
       }
 
-      if (accessories.length > 0 && Math.random() > 0.4) {
+      if (accessories.length > 0 && (['formal', 'party', 'professional'].includes(top.styleType) || outfitItems.every((item) => item.pattern === 'solid'))) {
         outfitItems.push(findBestColorMatch(accessories, outfitItems));
       }
 
@@ -221,14 +200,8 @@ function buildGuaranteedOutfits(filtered: FilteredCloset, userProfile: UserProfi
     }
   }
 
-  const sorted = candidates.sort((a, b) => b.rawScore - a.rawScore);
+  const sorted = dedupeCandidates(candidates).sort((a, b) => b.rawScore - a.rawScore);
   const top = sorted.slice(0, Math.min(sorted.length, count));
-
-  if (!top.length) return buildSingleItemOutfits(shoes, accessories, count);
-
-  while (top.length < count) {
-    top.push(top[top.length % top.length]);
-  }
 
   return top;
 }
@@ -236,6 +209,7 @@ function buildGuaranteedOutfits(filtered: FilteredCloset, userProfile: UserProfi
 export function filterByOccasion(items: ClothingItem[], occasion: string): ClothingItem[] {
   const allowed = CATEGORY_BY_OCCASION[occasion] ?? CATEGORY_BY_OCCASION.casual;
   const byOccasion = items.filter((i) => allowed.includes(i.styleType));
+  if (items.length < 10) return byOccasion;
   const seasonMode = getCurrentSeasonMode();
   const seasonFiltered = byOccasion.filter((item) => matchesSeason(item, seasonMode));
 
@@ -270,8 +244,9 @@ function findBestAccessory(items: ClothingItem[], existing: ClothingItem[], occa
 }
 
 export function buildCombinations(closet: ClothingItem[], occasion: string, season: string): OutfitCandidate[] {
-  const tops = closet.filter((i) => i.category === 'top' && matchesSeason(i, season));
-  const bottoms = closet.filter((i) => i.category === 'bottom' && matchesSeason(i, season));
+  const applySeason = closet.length >= 10;
+  const tops = closet.filter((i) => i.category === 'top' && (!applySeason || matchesSeason(i, season)));
+  const bottoms = closet.filter((i) => i.category === 'bottom' && (!applySeason || matchesSeason(i, season)));
   const shoes = closet.filter((i) => i.category === 'shoes');
   const accessories = closet.filter((i) => i.category === 'accessory');
   const outerwear = closet.filter((i) => i.category === 'outerwear');
@@ -427,9 +402,10 @@ export function generateOutfitName(a: string | OutfitCandidate, b: number | stri
 
   const vibes = vibeMap[occasion] ?? vibeMap.casual;
   const styles = styleMap[colorFamily];
-  const vibe = vibes[Math.floor(Math.random() * vibes.length)] ?? '';
-  const style = styles[Math.floor(Math.random() * styles.length)] ?? 'Look';
-  const suffix = score >= 8.5 ? ' *' : '';
+  const seed = Number.parseInt(stableHash(`${occasion}:${score}:${candidateItems(outfit).map((item) => item.id).join('|')}`).slice(0, 4), 36);
+  const vibe = vibes[seed % vibes.length] ?? '';
+  const style = styles[(seed + 1) % styles.length] ?? 'Look';
+  const suffix = score >= 8.5 ? ' Select' : '';
 
   return `${vibe}${style}${suffix}`;
 }
@@ -489,19 +465,8 @@ async function applyGeminiLayer(candidates: OutfitCandidate[], user: UserProfile
   }
 
   const top6 = candidates.slice(0, 6);
-  const geminiKey = `outfit-gemini-${user.skinToneId}-${user.skinUndertone}-${top6
-    .map((candidate) => [candidate.top.id, candidate.bottom.id, candidate.shoes?.id, candidate.accessory?.id, candidate.outerwear?.id]
-      .filter((x): x is string => Boolean(x))
-      .join('|'))
-    .join('::')}`;
-
   const { data: ratings, error } = await safeAsync(
-    async () => managedRequest(
-      geminiKey,
-      async () => validateWithGemini(top6, `Tone ${user.skinToneId}`, user.skinUndertone, tasteProfile.styleIdentity, 'neutral', `${tasteProfile.patternTolerance}`),
-      10 * 60 * 1000,
-      1
-    ),
+    async () => validateWithGemini(top6, `Tone ${user.skinToneId}`, user.skinUndertone, tasteProfile.styleIdentity, 'neutral', `${tasteProfile.patternTolerance}`),
     'Outfit.applyGeminiLayer'
   );
 
@@ -594,8 +559,25 @@ export async function generateOutfitsProduction(occasionInput: string, closet: C
     }
     if (candidates.length >= 50) break;
   }
-  const ranked = candidates.sort((a, b) => b.score.final - a.score.final).slice(0, 3);
-  return ranked.map((c) => ({ id: `outfit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name: generateOutfitName(occasion, c.score.color, c.score.skin), occasion, itemIds: c.items.map((i) => i.id), colorScore: c.score.color * 10, skinScore: c.score.skin * 10, geminiScore: 7, tasteScore: c.score.taste * 10, finalScore: c.score.final * 10, wornOn: null, liked: 0, createdAt: new Date().toISOString(), reasons: generateOutfitExplanation(buildCandidate(c.items) as OutfitCandidate, userProfile.skinToneId, userProfile.skinUndertone, occasion).slice(0, 4) }));
+  const ranked = dedupeCandidates(candidates).sort((a, b) => b.score.final - a.score.final).slice(0, 3);
+  return ranked.map((c) => {
+    const candidate = buildCandidate(c.items);
+    return {
+      id: makeStableOutfitId('production', occasion, c.items),
+      name: generateOutfitName(occasion, c.score.color, c.score.skin),
+      occasion,
+      itemIds: c.items.map((i) => i.id),
+      colorScore: c.score.color * 10,
+      skinScore: c.score.skin * 10,
+      geminiScore: 7,
+      tasteScore: c.score.taste * 10,
+      finalScore: c.score.final * 10,
+      wornOn: null,
+      liked: 0,
+      createdAt: new Date().toISOString(),
+      reasons: candidate ? generateOutfitExplanation(candidate, userProfile.skinToneId, userProfile.skinUndertone, occasion).slice(0, 4) : [],
+    };
+  });
 }
 
 export async function generateOutfits(
@@ -608,9 +590,33 @@ export async function generateOutfits(
     return [];
   }
 
+  const totalItems = closetItems.length;
+  const topCount = closetItems.filter((item) => item.category === 'top').length;
+  const bottomCount = closetItems.filter((item) => item.category === 'bottom').length;
+  const shoeCount = closetItems.filter((item) => item.category === 'shoes').length;
+  const uniqueStyles = Array.from(new Set(closetItems.map((item) => item.styleType))).sort();
+  const uniqueCategories = Array.from(new Set(closetItems.map((item) => item.category))).sort();
+  console.log(`OutfitEngine: closet has ${totalItems} items total`);
+  console.log(`OutfitEngine: tops = ${topCount}, bottoms = ${bottomCount}, shoes = ${shoeCount}`);
+  console.log(`OutfitEngine: style_types in closet = [${uniqueStyles.join(', ')}]`);
+  console.log(`OutfitEngine: categories in closet = [${uniqueCategories.join(', ')}]`);
+
+  if (topCount < 1 || bottomCount < 1) {
+    console.log('[Outfit] Cannot generate a complete outfit without at least one top and one bottom.');
+    return [];
+  }
+
   const resolvedOccasion = resolveOccasion(occasion);
   const filtered = filterForOccasion(closetItems, resolvedOccasion);
+  const filteredItems = [...filtered.tops, ...filtered.bottoms, ...filtered.shoes, ...filtered.accessories];
+  const filteredTotal = filteredItems.length;
+  const filteredDetail = filteredItems.map((item) => `${item.id}:${item.styleType}`);
+  console.log(`OutfitEngine: after occasion filter = ${filteredTotal} items`);
+  console.log(`OutfitEngine: filtered items = [${filteredDetail.join(', ')}]`);
   let candidates = buildGuaranteedOutfits(filtered, userProfile, 5);
+
+  const fallbackTriggered = candidates.length < 3;
+  console.log(`OutfitEngine: fallback triggered = ${fallbackTriggered}`);
 
   if (candidates.length < 3) {
     const allItems: FilteredCloset = {
@@ -650,25 +656,14 @@ export async function generateOutfits(
 
   const topCandidates = ranked.slice(0, 6).map((entry) => entry.candidate);
   if (topCandidates.length) {
-    const geminiKey = `outfit-gemini-${userProfile.skinToneId}-${userProfile.skinUndertone}-${topCandidates
-      .map((candidate) => [candidate.top.id, candidate.bottom.id, candidate.shoes?.id, candidate.accessory?.id, candidate.outerwear?.id]
-        .filter((x): x is string => Boolean(x))
-        .join('|'))
-      .join('::')}`;
-
     const { data: ratings, error } = await safeAsync(
-      async () => managedRequest(
-        geminiKey,
-        async () => validateWithGemini(
-          topCandidates,
-          `Tone ${userProfile.skinToneId}`,
-          userProfile.skinUndertone,
-          tasteProfile.styleIdentity,
-          'neutral',
-          `${tasteProfile.patternTolerance}`
-        ),
-        10 * 60 * 1000,
-        1
+      async () => validateWithGemini(
+        topCandidates,
+        `Tone ${userProfile.skinToneId}`,
+        userProfile.skinUndertone,
+        tasteProfile.styleIdentity,
+        'neutral',
+        `${tasteProfile.patternTolerance}`
       ),
       'Outfit.validateWithGemini'
     );
@@ -685,15 +680,23 @@ export async function generateOutfits(
         if (entry) {
           entry.candidate.geminiScore = rating.score;
           entry.geminiScore = rating.score;
+          entry.finalScore = (entry.rawScore * 0.25) + (entry.tasteScore * 0.3) + (entry.skinScore * 0.25) + (entry.geminiScore * 0.2);
+          entry.candidate.finalScore = entry.finalScore;
+          entry.candidate.reasons = rating.reason ? [...entry.candidate.reasons, rating.reason] : entry.candidate.reasons;
         }
       });
     }
   }
 
-  const results = ranked.slice(0, 3);
-  while (results.length < 3 && ranked.length > 0) {
-    results.push(ranked[results.length % ranked.length]);
+  const baseThreshold = 6;
+  const reranked = dedupeCandidates(ranked).sort((a, b) => b.finalScore - a.finalScore);
+  let filteredByScore = reranked.filter((entry) => entry.finalScore >= baseThreshold);
+  if (!filteredByScore.length) {
+    const loweredThreshold = baseThreshold * 0.7;
+    filteredByScore = reranked.filter((entry) => entry.finalScore >= loweredThreshold);
   }
+  const rankedPool = filteredByScore.length ? filteredByScore : reranked;
+  const results = rankedPool.slice(0, 3);
 
   if (results.length === 0 && closetItems.length > 0) {
     const top = closetItems.find((item) => item.category === 'top');
@@ -715,7 +718,7 @@ export async function generateOutfits(
   }
 
   const outfits: Outfit[] = results.map((entry) => ({
-    id: `outfit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: makeStableOutfitId('outfit', resolvedOccasion, entry.items),
     name: generateOutfitName(entry.candidate, resolvedOccasion, entry.finalScore),
     occasion: resolvedOccasion,
     itemIds: entry.items.map((item) => item.id),
@@ -728,7 +731,9 @@ export async function generateOutfits(
     liked: 0,
     createdAt: new Date().toISOString(),
     reasons: [
+      `Confidence ${Math.round(entry.finalScore * 10)}% based on closet match, color harmony, occasion fit, and taste feedback`,
       ...generateOutfitExplanation(entry.candidate, userProfile.skinToneId, userProfile.skinUndertone, resolvedOccasion),
+      ...entry.candidate.reasons,
       ...explainOutfitChoice(entry.candidate, tasteProfile),
     ].slice(0, 5),
   }));
@@ -737,6 +742,8 @@ export async function generateOutfits(
     await safeAsync(async () => recalculateTasteWeights(), 'Outfit.recalculateWeights');
   }
 
+  console.log(`OutfitEngine: final outfit count = ${outfits.length}`);
+
   return outfits;
 }
 
@@ -744,18 +751,18 @@ export function generateFallbackOutfits(closet: ClothingItem[], count = 3): Outf
   const tops = closet.filter(i => i.category === 'top');
   const bottoms = closet.filter(i => i.category === 'bottom');
   const shoes = closet.filter(i => i.category === 'shoes');
-  const accessories = closet.filter(i => i.category === 'accessory');
+  if (!tops.length || !bottoms.length) return [];
 
   const results: Outfit[] = [];
   for (let i = 0; i < count; i++) {
-    const top = tops[i % tops.length] || createPlaceholderItem('top');
-    const bottom = bottoms[i % bottoms.length] || createPlaceholderItem('bottom');
+    const top = tops[i % tops.length];
+    const bottom = bottoms[i % bottoms.length];
     const shoe = shoes[i % shoes.length] || null;
-    const items = [top, bottom];
+    const items: ClothingItem[] = [top, bottom];
     if (shoe) items.push(shoe);
 
     const outfit: Outfit = {
-      id: `fallback-${Date.now()}-${i}`,
+      id: makeStableOutfitId('fallback', 'casual', items),
       name: `Simple ${top.colorFamily || 'Neutral'} Combination`,
       occasion: 'casual',
       itemIds: items.map(it => it.id),
@@ -774,6 +781,52 @@ export function generateFallbackOutfits(closet: ClothingItem[], count = 3): Outf
   return results;
 }
 
+function generateBasicOutfits(closet: ClothingItem[], occasion = 'casual', count = 3): Outfit[] {
+  const tops = closet.filter((i) => i.category === 'top');
+  const bottoms = closet.filter((i) => i.category === 'bottom');
+  const shoes = closet.filter((i) => i.category === 'shoes');
+  if (!tops.length || !bottoms.length) return [];
+
+  const results: Outfit[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const top = tops[i % tops.length];
+    const bottom = bottoms[i % bottoms.length];
+    const items: ClothingItem[] = [top, bottom];
+    if (shoes.length) items.push(shoes[i % shoes.length]);
+
+    results.push({
+      id: makeStableOutfitId('basic', occasion, items),
+      name: generateOutfitName(occasion, 7, 7),
+      occasion,
+      itemIds: items.map((item) => item.id),
+      colorScore: 70,
+      skinScore: 70,
+      geminiScore: 7,
+      tasteScore: 70,
+      finalScore: 70,
+      wornOn: null,
+      liked: 0,
+      createdAt: new Date().toISOString(),
+      reasons: ['Basic top and bottom pairing'],
+    });
+  }
+
+  return results;
+}
+
+export async function safeGenerateOutfits(
+  occasion: string,
+  closetItems: ClothingItem[],
+  userProfile: UserProfile,
+  tasteProfile: TasteProfile
+): Promise<Outfit[]> {
+  try {
+    return await generateOutfits(occasion, closetItems, userProfile, tasteProfile);
+  } catch {
+    return generateBasicOutfits(closetItems, resolveOccasion(occasion));
+  }
+}
+
 export async function generateGuaranteed(
   occasionInput: string,
   closet: ClothingItem[],
@@ -782,8 +835,7 @@ export async function generateGuaranteed(
 ): Promise<Outfit[]> {
   const outfits = await generateOutfits(occasionInput, closet, profile, taste);
   if (outfits.length >= 3) return outfits;
-  
-  // Guarantee 3 even if filtered failed
+
   const fallback = generateFallbackOutfits(closet, 3 - outfits.length);
   return [...outfits, ...fallback].slice(0, 3);
 }
@@ -791,7 +843,7 @@ export async function generateGuaranteed(
 function makeOutfit(items: ClothingItem[], occasion = 'casual'): Outfit {
   const finalScore = Math.round(calculateRawScore(items) * 10);
   return {
-    id: `build-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: makeStableOutfitId('build', occasion, items),
     name: 'Built Around Your Pick',
     occasion,
     itemIds: items.map((i) => i.id),

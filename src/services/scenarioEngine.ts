@@ -10,6 +10,8 @@ import {
 import { scoreCandidateAgainstTaste } from './tasteEngine';
 import { AVOID_COLORS_MAP, CONFIDENCE_TIPS } from '../constants/scenarioRules';
 import { ClothingItem, Outfit, OutfitCandidate, TasteProfile, UserProfile } from '../types/models';
+import { managedRequest } from './requestManager';
+import { CacheCategory } from './cacheEngine';
 
 const SCENARIO_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const SCENARIO_MODEL_CANDIDATES = [
@@ -242,40 +244,61 @@ async function callGeminiPrompt(prompt: string): Promise<{ text: string; status:
     throw new Error('Gemini API key is not configured.');
   }
 
-  let lastStatus = 500;
-  let lastText = '';
+  const cacheKey = `scenario:${userPromptHash(prompt)}`;
 
-  for (const model of SCENARIO_MODEL_CANDIDATES) {
-    const controller = new AbortController();
-    const timeoutHandle = setTimeout(() => controller.abort(), 12000);
+  return managedRequest(
+    cacheKey,
+    async () => {
+      let lastStatus = 500;
+      let lastText = '';
 
-    const response = await fetch(`${SCENARIO_API_BASE}/${model}:generateContent?key=${key}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-      }),
-    });
-    clearTimeout(timeoutHandle);
+      for (const model of SCENARIO_MODEL_CANDIDATES) {
+        const controller = new AbortController();
+        const timeoutHandle = setTimeout(() => controller.abort(), 12000);
 
-    const json = await response.json() as {
-      error?: { message?: string };
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-    };
+        const response = await fetch(`${SCENARIO_API_BASE}/${model}:generateContent?key=${key}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { response_mime_type: 'application/json' },
+          }),
+        });
+        clearTimeout(timeoutHandle);
 
-    const message = json.error?.message?.toLowerCase() ?? '';
-    const unsupported = response.status === 404 || message.includes('not supported for generatecontent') || message.includes('not found for api version');
-    if (unsupported) {
-      continue;
-    }
+        const json = await response.json() as {
+          error?: { message?: string };
+          candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+        };
 
-    lastStatus = response.status;
-    lastText = json.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-    return { text: lastText, status: lastStatus };
+        const message = json.error?.message?.toLowerCase() ?? '';
+        const unsupported = response.status === 404 || message.includes('not supported for generatecontent') || message.includes('not found for api version');
+        if (unsupported) {
+          continue;
+        }
+
+        lastStatus = response.status;
+        lastText = json.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+        if (!response.ok) {
+          throw new Error(json.error?.message ?? `SCENARIO_HTTP_${response.status}`);
+        }
+        return { text: lastText, status: lastStatus };
+      }
+
+      return { text: lastText, status: lastStatus };
+    },
+    CacheCategory.SCENARIO,
+    { ttlMs: 60 * 60 * 1000, ttlDays: 2 }
+  );
+}
+
+function userPromptHash(value: string): string {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0;
   }
-
-  return { text: lastText, status: lastStatus };
+  return Math.abs(hash).toString(36);
 }
 
 export async function extractScenarioContext(

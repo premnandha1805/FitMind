@@ -8,11 +8,12 @@ import { executeSqlWithRetry, getOne } from '../db/queries';
 import { FitCheckResult, OutfitCandidate, UserProfile } from '../types/models';
 import { md5FileHash } from '../utils/hashUtils';
 import { safeAsync } from '../utils/safeAsync';
-import { getCached } from './cacheEngine';
+import { CacheCategory, getCached } from './cacheEngine';
 import { withFallback, localFitCheck } from './fallbackEngine';
 import { managedRequest } from './requestManager';
 import { getResetCountdown, readableError } from './validationEngine';
-import { getSeasonalPalette } from './colorEngine';
+import { getSeasonalPalette, scoreColorHarmony } from './colorEngine';
+import { detectClothing } from './visionEngine';
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_GENERATE_MODEL = 'gemini-2.0-flash';
@@ -23,7 +24,7 @@ const PREFERRED_GENERATE_MODELS = [
   'gemini-1.5-flash-latest',
   'gemini-1.5-flash-8b',
 ] as const;
-const DAILY_LIMIT = 60;
+const DAILY_LIMIT = 50;
 const GEMINI_KEY_STORE = 'GEMINI_KEY';
 const GEMINI_API_KEY = Constants.expoConfig?.extra?.geminiApiKey ?? '';
 const FIT_CHECK_RESPONSE_SCHEMA = {
@@ -351,13 +352,13 @@ function buildPartialFitCheck(parsed: unknown): FitCheckResult {
 async function incrementCallCount(): Promise<void> {
   const today = dateKey();
   await executeSqlWithRetry('INSERT OR IGNORE INTO api_usage (date, gemini_calls) VALUES (?, 0);', [today]);
-  await executeSqlWithRetry('UPDATE api_usage SET gemini_calls = gemini_calls + 1 WHERE date = ?;', [today]);
+  await executeSqlWithRetry('UPDATE api_usage SET gemini_calls = gemini_calls + 1, updated_at = datetime(\'now\') WHERE date = ?;', [today]);
 }
 
 async function markQuotaExhausted(): Promise<void> {
   const today = dateKey();
   await executeSqlWithRetry('INSERT OR IGNORE INTO api_usage (date, gemini_calls) VALUES (?, 0);', [today]);
-  await executeSqlWithRetry('UPDATE api_usage SET gemini_calls = ? WHERE date = ?;', [DAILY_LIMIT, today]);
+  await executeSqlWithRetry('UPDATE api_usage SET gemini_calls = ?, gemini_quota_exhausted = 1, updated_at = datetime(\'now\') WHERE date = ?;', [DAILY_LIMIT, today]);
 }
 
 async function computeMD5(value: string): Promise<string> {
@@ -610,8 +611,8 @@ async function requestManagedFitCheck(imageBase64: string, skinToneId: number, u
   return managedRequest(
     cacheKey,
     () => callGeminiAPI(imageBase64, skinToneId, undertone),
-    30 * 60 * 1000,
-    7
+    CacheCategory.FIT_CHECK,
+    { ttlMs: 30 * 60 * 1000, ttlDays: 7 }
   );
 }
 
@@ -621,20 +622,24 @@ export async function analyzeFitCheck(
   undertone: string,
   closetItems: any[]
 ): Promise<any> {
-  const base64 = await prepareImageForGemini(imageUri);
-  const cacheKey = base64.substring(0, 32);
-  const warmHit = await getCached(cacheKey);
+  const imageHash = await md5FileHash(imageUri);
+  const stableCacheKey = `fitcheck:${imageHash}:${skinToneId}:${undertone}`;
+  const warmHit = await getCached(stableCacheKey);
   if (warmHit) {
     return warmHit;
   }
 
+  const base64 = await prepareImageForGemini(imageUri);
+
   return withFallback(
-    () => managedRequest(cacheKey,
-      () => requestManagedFitCheck(base64, skinToneId, undertone),
-      30 * 60 * 1000, 7),
-    () => managedRequest(`${cacheKey}_retry`,
+    () => managedRequest(stableCacheKey,
+      () => callGeminiAPI(base64, skinToneId, undertone),
+      CacheCategory.FIT_CHECK,
+      { ttlMs: 30 * 60 * 1000, ttlDays: 7 }),
+    () => managedRequest(`${stableCacheKey}:compressed`,
       () => callGeminiAPICompressed(base64, skinToneId, undertone),
-      15 * 60 * 1000, 3),
+      CacheCategory.FIT_CHECK,
+      { ttlMs: 15 * 60 * 1000, ttlDays: 3 }),
     () => localFitCheck(closetItems, skinToneId, undertone)
   );
 }
@@ -647,19 +652,30 @@ export async function validateWithGemini(
   colorPreference: string,
   patternDescription: string
 ): Promise<Array<{ index: number; score: number; reason: string }>> {
+  const localRatings = (reason: string): Array<{ index: number; score: number; reason: string }> => topCandidates.slice(0, 6).map((candidate, index) => {
+    const colors = [candidate.top.colorHex, candidate.bottom.colorHex, candidate.shoes?.colorHex, candidate.accessory?.colorHex]
+      .filter((x): x is string => Boolean(x));
+    const score = Math.max(5, Math.min(9, scoreColorHarmony([candidate.top, candidate.bottom, candidate.shoes, candidate.accessory].filter(Boolean) as any[])));
+    return {
+      index,
+      score,
+      reason: `${reason} Local stylist score based on ${colors.join(', ')} and closet-only item compatibility.`,
+    };
+  });
+
   const key = await getGeminiKey();
   if (!key || key === '') {
-    throw new Error('Gemini API key not configured');
+    return localRatings('AI key unavailable.');
   }
 
   const state = await NetInfo.fetch();
   if (!state.isConnected) {
-    throw new Error('No internet connection for Gemini validation.');
+    return localRatings('Offline mode.');
   }
 
   const { remaining, resetIn } = await getRemainingCalls();
   if (remaining <= 0) {
-    throw new Error(`Daily limit reached. Resets in ${resetIn}.`);
+    return localRatings(`Daily AI limit reached. Resets in ${resetIn}.`);
   }
 
   const candidates = topCandidates.slice(0, 6).map((c, index) => ({
@@ -679,9 +695,36 @@ Rate each candidate from 1-10 and return JSON only:
 { "ratings": [{ "index": 0, "score": 8, "reason": "brief reason" }] }
 Candidates: ${JSON.stringify(candidates)}`;
 
-  const response = await callGemini(prompt);
+  const validationKey = `gemini-validate:${await computeMD5(JSON.stringify({
+    toneName,
+    undertone,
+    styleIdentity,
+    colorPreference,
+    patternDescription,
+    candidates,
+  }))}`;
+
+  let response: { text: string; status: number };
+  try {
+    response = await managedRequest(
+      validationKey,
+      () => callGemini(prompt, undefined, { responseMimeType: 'application/json' }),
+      CacheCategory.OUTFIT_VAL,
+      {
+        ttlMs: 12 * 60 * 60 * 1000,
+        ttlDays: 7,
+        fallbackFn: () => ({ text: JSON.stringify({ ratings: localRatings('AI validation fallback.') }), status: 200 }),
+      }
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    if (isHardQuotaExceeded(message)) {
+      await safeAsync(async () => markQuotaExhausted(), 'Gemini.markQuotaExhaustedValidation');
+    }
+    return localRatings('AI validation unavailable.');
+  }
   if (response.status === 429) {
-    throw new Error(`Daily limit reached. Resets in ${resetIn}.`);
+    return localRatings(`AI rate limit reached. Resets in ${resetIn}.`);
   }
 
   const parsed = extractJSON(response.text) as { ratings?: Array<{ index: number; score: number; reason: string }> } | null;
@@ -712,13 +755,22 @@ export async function runFitCheck(imageUri: string, user: UserProfile): Promise<
   }
 
   const hash = await md5FileHash(imageUri);
-  const cached = await getOne<{ gemini_result: string }>('SELECT gemini_result FROM fit_checks WHERE image_hash = ?;', [hash]);
+  const cached = await getOne<{ result_json: string }>('SELECT result_json FROM fit_checks WHERE image_hash = ?;', [hash]);
+  const { data: detected } = await safeAsync(
+    async () => detectClothing(imageUri),
+    'Gemini.detectFitStyle'
+  );
 
   if (cached) {
-    const parsed = extractJSON(cached.gemini_result);
+    const parsed = extractJSON(cached.result_json);
     if (validateFitCheckResponse(parsed) && !isLikelyPartialFitCheck(parsed)) {
       const remain = await getRemainingCalls();
-      return { result: parsed as FitCheckResult, remaining: remain.remaining };
+      const enriched: FitCheckResult = {
+        ...(parsed as FitCheckResult),
+        detected_style_type: (parsed as FitCheckResult).detected_style_type ?? detected?.style_type,
+        detected_category: (parsed as FitCheckResult).detected_category ?? detected?.category,
+      };
+      return { result: enriched, remaining: remain.remaining };
     }
 
     await executeSqlWithRetry('DELETE FROM fit_checks WHERE image_hash = ?;', [hash]);
@@ -726,6 +778,17 @@ export async function runFitCheck(imageUri: string, user: UserProfile): Promise<
 
   const remain = await getRemainingCalls();
   if (remain.remaining <= 0) {
+    if (__DEV__) {
+      const fallback = localFitCheck([], user.skinToneId, user.skinUndertone) as FitCheckResult;
+      return {
+        result: {
+          ...fallback,
+          detected_style_type: detected?.style_type,
+          detected_category: detected?.category,
+        },
+        remaining: 0,
+      };
+    }
     throw new Error(`Daily limit reached. Resets in ${remain.resetIn}.`);
   }
 
@@ -735,11 +798,15 @@ export async function runFitCheck(imageUri: string, user: UserProfile): Promise<
     throw new Error('Could not generate a full fit report. Please retry with clearer lighting and a full outfit frame.');
   }
 
-  const finalResult: FitCheckResult = parsed as FitCheckResult;
+  const finalResult: FitCheckResult = {
+    ...(parsed as FitCheckResult),
+    detected_style_type: detected?.style_type,
+    detected_category: detected?.category,
+  };
 
   await executeSqlWithRetry(
-    'INSERT INTO fit_checks (id, image_path, image_hash, gemini_result, style_score, created_at) VALUES (?, ?, ?, ?, ?, datetime(\'now\'));',
-    [`fit-${Date.now()}`, imageUri, hash, JSON.stringify(finalResult), finalResult.style_score]
+    'INSERT INTO fit_checks (id, image_path, image_hash, result_json, style_score, source, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime(\'now\'));',
+    [`fit-${Date.now()}`, imageUri, hash, JSON.stringify(finalResult), finalResult.style_score, 'gemini']
   );
 
   const latestRemain = await getRemainingCalls();

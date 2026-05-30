@@ -138,7 +138,7 @@ function ClosetCard({
             <Image
               source={{ uri: item.imagePath }}
               style={styles.cardImage}
-              resizeMode="cover"
+              resizeMode="contain"
               onError={() => onImageError(item.id)}
             />
             <Animated.View
@@ -556,12 +556,15 @@ const styles = StyleSheet.create({
   card: {
     width: '100%',
     aspectRatio: 3 / 4,
-    backgroundColor: '#201f1f',
+    backgroundColor: '#191817',
     borderRadius: 16,
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(230,196,135,0.10)',
   },
   cardImage: {
     ...StyleSheet.absoluteFillObject,
+    margin: 10,
   },
   imageGrayOverlay: {
     ...StyleSheet.absoluteFillObject,

@@ -2,7 +2,7 @@ import { getDb } from './queries';
 import { resolveCategory, normalizeStyle } from '../constants/categoryMap';
 
 const db = getDb();
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 const TABLES = `
 CREATE TABLE IF NOT EXISTS user_profile (
@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS api_cache (
 CREATE TABLE IF NOT EXISTS request_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL DEFAULT (unixepoch()), request_type TEXT NOT NULL, source TEXT NOT NULL CHECK(source IN ('api','cache','fallback','local')), duration_ms INTEGER DEFAULT 0, success INTEGER NOT NULL DEFAULT 1, error_code TEXT DEFAULT NULL
 );
+CREATE TABLE IF NOT EXISTS api_usage (
+  date TEXT PRIMARY KEY, gemini_calls INTEGER NOT NULL DEFAULT 0, gemini_quota_exhausted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now'))
 );
@@ -47,10 +50,26 @@ CREATE INDEX IF NOT EXISTS idx_feedback_created ON outfit_feedback(created_at);
 CREATE INDEX IF NOT EXISTS idx_cache_expires ON api_cache(expires_at);
 CREATE INDEX IF NOT EXISTS idx_cache_category ON api_cache(category);
 CREATE INDEX IF NOT EXISTS idx_requests_time ON request_log(timestamp);
+CREATE INDEX IF NOT EXISTS idx_requests_type_source_time ON request_log(request_type, source, timestamp);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_fitcheck_hash ON fit_checks(image_hash);
 `;
 
-export async function initializeDatabase(): Promise<void> { await db.execAsync('PRAGMA journal_mode = WAL;'); await db.execAsync('PRAGMA foreign_keys = ON;'); await db.execAsync('PRAGMA cache_size = -8000;'); await db.execAsync(TABLES); await db.execAsync(INDEXES); await runMigrations(); await insertDefaults(); }
+export async function initializeDatabase(): Promise<void> { await db.execAsync('PRAGMA journal_mode = WAL;'); await db.execAsync('PRAGMA foreign_keys = ON;'); await db.execAsync('PRAGMA cache_size = -8000;'); await db.execAsync(TABLES); await runMigrations(); await db.execAsync(INDEXES); await insertDefaults(); }
 async function insertDefaults(): Promise<void> { await db.runAsync(`INSERT OR IGNORE INTO taste_profile (id) VALUES ('taste')`); await db.runAsync(`INSERT OR IGNORE INTO explicit_preferences (id) VALUES ('prefs')`); }
-async function runMigrations(): Promise<void> { const current = await db.getFirstAsync<{version:number}>('SELECT MAX(version) as version FROM schema_version').catch(() => ({version:0})); const v = current?.version || 0; if (v < 5) { const migrations = ['ALTER TABLE clothing_items ADD COLUMN thumbnail_path TEXT','ALTER TABLE clothing_items ADD COLUMN color_name TEXT DEFAULT "Grey"','ALTER TABLE clothing_items ADD COLUMN material TEXT DEFAULT "unknown"','ALTER TABLE clothing_items ADD COLUMN brand TEXT DEFAULT ""','ALTER TABLE clothing_items ADD COLUMN cost REAL DEFAULT 0','ALTER TABLE clothing_items ADD COLUMN updated_at TEXT DEFAULT (datetime("now"))','ALTER TABLE outfits ADD COLUMN taste_score REAL DEFAULT 7.0','ALTER TABLE outfits ADD COLUMN explanation TEXT DEFAULT "[]"','ALTER TABLE outfits ADD COLUMN weather_temp REAL','ALTER TABLE outfits ADD COLUMN weather_cond TEXT','ALTER TABLE fit_checks ADD COLUMN outfit_id TEXT','ALTER TABLE fit_checks ADD COLUMN skin_score INTEGER DEFAULT 7','ALTER TABLE fit_checks ADD COLUMN color_score INTEGER DEFAULT 7','ALTER TABLE fit_checks ADD COLUMN source TEXT DEFAULT "gemini"','ALTER TABLE outfit_feedback ADD COLUMN color_families TEXT DEFAULT "[]"','ALTER TABLE outfit_feedback ADD COLUMN time_of_day TEXT DEFAULT "morning"','ALTER TABLE outfit_feedback ADD COLUMN day_of_week INTEGER DEFAULT 1','ALTER TABLE api_cache ADD COLUMN category TEXT DEFAULT "general"','ALTER TABLE api_cache ADD COLUMN hit_count INTEGER DEFAULT 0','ALTER TABLE api_cache ADD COLUMN last_hit INTEGER DEFAULT (unixepoch())']; for (const sql of migrations) await db.execAsync(sql).catch(() => {}); await db.runAsync('INSERT OR REPLACE INTO schema_version (version) VALUES (?)', [SCHEMA_VERSION]); }}
+async function runMigrations(): Promise<void> {
+  const current = await db.getFirstAsync<{version:number}>('SELECT MAX(version) as version FROM schema_version').catch(() => ({version:0}));
+  const v = current?.version || 0;
+  if (v < 5) {
+    const migrations = ['ALTER TABLE clothing_items ADD COLUMN thumbnail_path TEXT','ALTER TABLE clothing_items ADD COLUMN color_name TEXT DEFAULT "Grey"','ALTER TABLE clothing_items ADD COLUMN material TEXT DEFAULT "unknown"','ALTER TABLE clothing_items ADD COLUMN brand TEXT DEFAULT ""','ALTER TABLE clothing_items ADD COLUMN cost REAL DEFAULT 0','ALTER TABLE clothing_items ADD COLUMN updated_at TEXT DEFAULT (datetime("now"))','ALTER TABLE outfits ADD COLUMN taste_score REAL DEFAULT 7.0','ALTER TABLE outfits ADD COLUMN explanation TEXT DEFAULT "[]"','ALTER TABLE outfits ADD COLUMN weather_temp REAL','ALTER TABLE outfits ADD COLUMN weather_cond TEXT','ALTER TABLE fit_checks ADD COLUMN outfit_id TEXT','ALTER TABLE fit_checks ADD COLUMN skin_score INTEGER DEFAULT 7','ALTER TABLE fit_checks ADD COLUMN color_score INTEGER DEFAULT 7','ALTER TABLE fit_checks ADD COLUMN source TEXT DEFAULT "gemini"','ALTER TABLE outfit_feedback ADD COLUMN color_families TEXT DEFAULT "[]"','ALTER TABLE outfit_feedback ADD COLUMN time_of_day TEXT DEFAULT "morning"','ALTER TABLE outfit_feedback ADD COLUMN day_of_week INTEGER DEFAULT 1','ALTER TABLE api_cache ADD COLUMN category TEXT DEFAULT "general"','ALTER TABLE api_cache ADD COLUMN hit_count INTEGER DEFAULT 0','ALTER TABLE api_cache ADD COLUMN last_hit INTEGER DEFAULT (unixepoch())'];
+    for (const sql of migrations) await db.execAsync(sql).catch(() => {});
+  }
+  if (v < 6) {
+    await db.execAsync('CREATE TABLE IF NOT EXISTS api_usage (date TEXT PRIMARY KEY, gemini_calls INTEGER NOT NULL DEFAULT 0, gemini_quota_exhausted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT (datetime("now")));');
+    await db.execAsync('ALTER TABLE fit_checks ADD COLUMN result_json TEXT').catch(() => {});
+    await db.execAsync('UPDATE fit_checks SET result_json = COALESCE(result_json, gemini_result) WHERE result_json IS NULL').catch(() => {});
+  }
+  if (v < SCHEMA_VERSION) {
+    await db.runAsync('INSERT OR REPLACE INTO schema_version (version) VALUES (?)', [SCHEMA_VERSION]);
+  }
+}
 export async function repairExistingItems(): Promise<void> { const items = await db.getAllAsync<any>('SELECT id, category, style_type FROM clothing_items'); for (const item of items) { const fixedCategory = resolveCategory(item.category); const fixedStyle = normalizeStyle(item.style_type); if (fixedCategory !== item.category || fixedStyle !== item.style_type) { await db.runAsync(`UPDATE clothing_items SET category = ?, style_type = ?, updated_at = datetime('now') WHERE id = ? AND user_corrected = 0`, [fixedCategory, fixedStyle, item.id]); } } }
